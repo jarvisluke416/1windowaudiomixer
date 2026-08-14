@@ -24,9 +24,6 @@ const double PI = 3.14159265358979323846;
 // ONE PLAYER
 const int PLAYER_COUNT = 1;
 
-const int GRID_COLUMNS = 1;
-const int GRID_ROWS = 1;
-
 const double MIN_TEMPO = 40.0;
 const double MAX_TEMPO = 480.0;
 const double TEMPO_STEP = 5.0;
@@ -48,6 +45,7 @@ const double MASTER_GAIN = 2.5;
 // ============================================================
 
 const COLORREF BACKGROUND = RGB(0, 207, 74);
+
 const COLORREF COLUMN = RGB(32, 32, 38);
 const COLORREF COLUMN_BORDER = RGB(55, 55, 65);
 
@@ -91,20 +89,24 @@ HWND songEditor[PLAYER_COUNT] = {};
 HWND mainWindow = nullptr;
 
 // ============================================================
-// SCROLLING / LAYOUT
+// LAYOUT
 // ============================================================
 
-int scrollY = 0;
-int contentHeight = 0;
+// Top control area.
+const int TOP_BAR_HEIGHT = 105;
 
-const int TOP_BAR_HEIGHT = 75;
+// One player section.
+const int SECTION_WIDTH = 900;
+const int SECTION_HEIGHT = 700;
 
-const int SECTION_WIDTH = 700;
-const int SECTION_HEIGHT = 560;
+// Compact buttons.
+const int SMALL_BUTTON_WIDTH = 70;
+const int SMALL_BUTTON_HEIGHT = 28;
 
-const int GRID_GAP = 10;
+const int CONTROL_GAP = 5;
 
-const int EDIT_HEIGHT = 270;
+// Editor.
+const int EDIT_HEIGHT = 500;
 
 // ============================================================
 // RANDOM
@@ -877,7 +879,7 @@ std::string GetEditorText(int playerIndex)
 }
 
 // ============================================================
-// VOLUME BOOST VALUE
+// VOLUME MULTIPLIER
 // ============================================================
 
 double GetVolumeMultiplier(int level)
@@ -1146,7 +1148,7 @@ bool GenerateAudio(
     }
 
     // ========================================================
-    // MASTER VOLUME + BOOST + SOFT LIMITER
+    // MASTER VOLUME
     // ========================================================
 
     if (volumeMultiplier < 1.0)
@@ -1198,7 +1200,7 @@ bool GenerateAudio(
 HBRUSH editBrush = nullptr;
 
 // ============================================================
-// UPDATE TEMPO
+// UPDATE TEMPO DISPLAY
 // ============================================================
 
 void UpdateTempoDisplay(int playerIndex)
@@ -1233,7 +1235,7 @@ void UpdateTempoDisplay(int playerIndex)
 }
 
 // ============================================================
-// UPDATE PITCH
+// UPDATE PITCH DISPLAY
 // ============================================================
 
 void UpdatePitchDisplay(int playerIndex)
@@ -1275,7 +1277,7 @@ void UpdatePitchDisplay(int playerIndex)
 }
 
 // ============================================================
-// UPDATE BOOST
+// UPDATE BOOST DISPLAY
 // ============================================================
 
 void UpdateBoostDisplay(int playerIndex)
@@ -1299,7 +1301,7 @@ void UpdateBoostDisplay(int playerIndex)
     snprintf(
         text,
         sizeof(text),
-        "BOOST: %.1fx",
+        "BOOST %.1fx",
         multiplier
     );
 
@@ -1321,90 +1323,7 @@ int PlayerButtonID(
 }
 
 // ============================================================
-// CONTENT HEIGHT
-// ============================================================
-
-int CalculateContentHeight(RECT rect)
-{
-    int rowHeight =
-        SECTION_HEIGHT +
-        GRID_GAP;
-
-    int height =
-        TOP_BAR_HEIGHT +
-        GRID_ROWS *
-        rowHeight +
-        30;
-
-    return
-        (height > rect.bottom)
-        ? height
-        : rect.bottom;
-}
-
-// ============================================================
-// UPDATE SCROLL BAR
-// ============================================================
-
-void UpdateScrollBar(HWND window)
-{
-    RECT rect;
-
-    GetClientRect(
-        window,
-        &rect
-    );
-
-    contentHeight =
-        CalculateContentHeight(
-            rect
-        );
-
-    int visibleHeight =
-        rect.bottom -
-        TOP_BAR_HEIGHT;
-
-    if (visibleHeight < 1)
-        visibleHeight = 1;
-
-    SCROLLINFO si = {};
-
-    si.cbSize =
-        sizeof(SCROLLINFO);
-
-    si.fMask =
-        SIF_RANGE |
-        SIF_PAGE |
-        SIF_POS;
-
-    si.nMin = 0;
-
-    si.nMax =
-        std::max(
-            0,
-            contentHeight -
-            TOP_BAR_HEIGHT -
-            1
-        );
-
-    si.nPage =
-        static_cast<UINT>(
-            visibleHeight
-        );
-
-    si.nPos =
-        scrollY;
-
-    SetScrollInfo(
-        window,
-        SB_VERT,
-        &si,
-        TRUE
-    );
-}
-
-// ============================================================
-// MOVE PLAYER CONTROLS
+// RESIZE CONTROLS
 // ============================================================
 
 void ResizePlayerControls(HWND window)
@@ -1416,141 +1335,145 @@ void ResizePlayerControls(HWND window)
         &rect
     );
 
-    int availableWidth =
+    int width =
         rect.right;
 
-    int columnWidth =
-        availableWidth /
-        GRID_COLUMNS;
+    if (width < 400)
+        width = 400;
 
-    if (columnWidth < SECTION_WIDTH)
-        columnWidth = SECTION_WIDTH;
+    // --------------------------------------------------------
+    // TOP LEFT CONTROL STRIP
+    // --------------------------------------------------------
 
-    for (
-        int i = 0;
-        i < PLAYER_COUNT;
-        ++i)
-    {
-        int row =
-            i / GRID_COLUMNS;
+    int x = 15;
+    int y = 15;
 
-        int column =
-            i % GRID_COLUMNS;
+    // PLAY
+    MoveWindow(
+        playButton[0],
+        x,
+        y,
+        65,
+        SMALL_BUTTON_HEIGHT,
+        TRUE
+    );
 
-        int x =
-            column *
-            columnWidth +
-            GRID_GAP;
+    x += 65 + CONTROL_GAP;
 
-        int y =
-            TOP_BAR_HEIGHT +
-            row *
-            (SECTION_HEIGHT + GRID_GAP) -
-            scrollY;
+    // LOOP
+    MoveWindow(
+        loopButton[0],
+        x,
+        y,
+        75,
+        SMALL_BUTTON_HEIGHT,
+        TRUE
+    );
 
-        int sectionWidth =
-            columnWidth -
-            GRID_GAP * 2;
+    x += 75 + CONTROL_GAP;
 
-        if (sectionWidth < 180)
-            sectionWidth = 180;
+    // BOOST
+    MoveWindow(
+        boostButton[0],
+        x,
+        y,
+        80,
+        SMALL_BUTTON_HEIGHT,
+        TRUE
+    );
 
-        int buttonWidth =
-            sectionWidth - 20;
+    x += 80 + CONTROL_GAP;
 
-        MoveWindow(
-            playButton[i],
-            x + 10,
-            y + 45,
-            buttonWidth,
-            40,
-            TRUE
-        );
+    // TEMPO MINUS
+    MoveWindow(
+        tempoMinusButton[0],
+        x,
+        y,
+        28,
+        SMALL_BUTTON_HEIGHT,
+        TRUE
+    );
 
-        MoveWindow(
-            loopButton[i],
-            x + 10,
-            y + 90,
-            buttonWidth,
-            34,
-            TRUE
-        );
+    x += 28;
 
-        MoveWindow(
-            boostButton[i],
-            x + 10,
-            y + 128,
-            buttonWidth,
-            34,
-            TRUE
-        );
+    // TEMPO LABEL
+    MoveWindow(
+        tempoLabel[0],
+        x,
+        y,
+        90,
+        SMALL_BUTTON_HEIGHT,
+        TRUE
+    );
 
-        MoveWindow(
-            tempoMinusButton[i],
-            x + 10,
-            y + 168,
-            40,
-            35,
-            TRUE
-        );
+    x += 90;
 
-        MoveWindow(
-            tempoLabel[i],
-            x + 55,
-            y + 168,
-            buttonWidth - 45,
-            35,
-            TRUE
-        );
+    // TEMPO PLUS
+    MoveWindow(
+        tempoPlusButton[0],
+        x,
+        y,
+        28,
+        SMALL_BUTTON_HEIGHT,
+        TRUE
+    );
 
-        MoveWindow(
-            tempoPlusButton[i],
-            x + 10,
-            y + 208,
-            buttonWidth,
-            35,
-            TRUE
-        );
+    x += 28 + CONTROL_GAP;
 
-        MoveWindow(
-            pitchMinusButton[i],
-            x + 10,
-            y + 248,
-            40,
-            35,
-            TRUE
-        );
+    // PITCH MINUS
+    MoveWindow(
+        pitchMinusButton[0],
+        x,
+        y,
+        28,
+        SMALL_BUTTON_HEIGHT,
+        TRUE
+    );
 
-        MoveWindow(
-            pitchLabel[i],
-            x + 55,
-            y + 248,
-            buttonWidth - 45,
-            35,
-            TRUE
-        );
+    x += 28;
 
-        MoveWindow(
-            pitchPlusButton[i],
-            x + 10,
-            y + 288,
-            buttonWidth,
-            35,
-            TRUE
-        );
+    // PITCH LABEL
+    MoveWindow(
+        pitchLabel[0],
+        x,
+        y,
+        80,
+        SMALL_BUTTON_HEIGHT,
+        TRUE
+    );
 
-        MoveWindow(
-            songEditor[i],
-            x + 10,
-            y + 330,
-            buttonWidth,
-            EDIT_HEIGHT,
-            TRUE
-        );
-    }
+    x += 80;
 
-    UpdateScrollBar(
-        window
+    // PITCH PLUS
+    MoveWindow(
+        pitchPlusButton[0],
+        x,
+        y,
+        28,
+        SMALL_BUTTON_HEIGHT,
+        TRUE
+    );
+
+    // --------------------------------------------------------
+    // SONG EDITOR
+    // --------------------------------------------------------
+
+    int editorX = 15;
+    int editorY = 60;
+
+    int editorWidth =
+        rect.right - 30;
+
+    if (editorWidth < 300)
+        editorWidth = 300;
+
+    MoveWindow(
+        songEditor[0],
+        editorX,
+        editorY,
+        editorWidth,
+        EDIT_HEIGHT,
+        TRUE
     );
 }
 
@@ -1558,114 +1481,79 @@ void ResizePlayerControls(HWND window)
 // DRAW PLAYER SECTION
 // ============================================================
 
-void DrawPlayerSections(
+void DrawPlayerSection(
     HDC dc,
     RECT rect)
 {
-    int columnWidth =
-        rect.right /
-        GRID_COLUMNS;
-
-    for (
-        int i = 0;
-        i < PLAYER_COUNT;
-        ++i)
+    RECT section =
     {
-        int row =
-            i / GRID_COLUMNS;
+        10,
+        5,
+        rect.right - 10,
+        EDIT_HEIGHT + 80
+    };
 
-        int column =
-            i % GRID_COLUMNS;
+    HBRUSH brush =
+        CreateSolidBrush(
+            COLUMN
+        );
 
-        int x =
-            column *
-            columnWidth +
-            GRID_GAP;
+    FillRect(
+        dc,
+        &section,
+        brush
+    );
 
-        int y =
-            TOP_BAR_HEIGHT +
-            row *
-            (SECTION_HEIGHT + GRID_GAP) -
-            scrollY;
+    DeleteObject(
+        brush
+    );
 
-        RECT section =
-        {
-            x,
-            y,
-            x + columnWidth -
-                GRID_GAP * 2,
-            y + SECTION_HEIGHT
-        };
+    HPEN borderPen =
+        CreatePen(
+            PS_SOLID,
+            1,
+            COLUMN_BORDER
+        );
 
-        if (
-            section.bottom < TOP_BAR_HEIGHT ||
-            section.top > rect.bottom)
-        {
-            continue;
-        }
-
-        HBRUSH brush =
-            CreateSolidBrush(
-                COLUMN
-            );
-
-        FillRect(
+    HPEN oldPen =
+        (HPEN)SelectObject(
             dc,
-            &section,
-            brush
-        );
-
-        DeleteObject(
-            brush
-        );
-
-        HPEN borderPen =
-            CreatePen(
-                PS_SOLID,
-                1,
-                COLUMN_BORDER
-            );
-
-        HPEN oldPen =
-            (HPEN)SelectObject(
-                dc,
-                borderPen
-            );
-
-        HBRUSH oldBrush =
-            (HBRUSH)SelectObject(
-                dc,
-                GetStockObject(
-                    NULL_BRUSH
-                )
-            );
-
-        Rectangle(
-            dc,
-            section.left,
-            section.top,
-            section.right,
-            section.bottom
-        );
-
-        SelectObject(
-            dc,
-            oldBrush
-        );
-
-        SelectObject(
-            dc,
-            oldPen
-        );
-
-        DeleteObject(
             borderPen
         );
-    }
+
+    HBRUSH oldBrush =
+        (HBRUSH)SelectObject(
+            dc,
+            GetStockObject(
+                NULL_BRUSH
+            )
+        );
+
+    Rectangle(
+        dc,
+        section.left,
+        section.top,
+        section.right,
+        section.bottom
+    );
+
+    SelectObject(
+        dc,
+        oldBrush
+    );
+
+    SelectObject(
+        dc,
+        oldPen
+    );
+
+    DeleteObject(
+        borderPen
+    );
 }
 
 // ============================================================
-// PLAY ONE PLAYER
+// PLAY SONG
 // ============================================================
 
 void PlaySong(int playerIndex)
@@ -1839,7 +1727,7 @@ void PlaySong(int playerIndex)
     };
 
     // ========================================================
-    // FIRST BUFFER
+    // GENERATE FIRST BUFFER
     // ========================================================
 
     if (!generateBuffer(0))
@@ -1861,7 +1749,7 @@ void PlaySong(int playerIndex)
     }
 
     // ========================================================
-    // PREPARE / WRITE
+    // PREPARE AND WRITE
     // ========================================================
 
     auto prepareAndWrite =
@@ -1928,7 +1816,7 @@ void PlaySong(int playerIndex)
     };
 
     // ========================================================
-    // WRITE FIRST BUFFER
+    // FIRST BUFFER
     // ========================================================
 
     if (!prepareAndWrite(0))
@@ -1954,7 +1842,7 @@ void PlaySong(int playerIndex)
     }
 
     // ========================================================
-    // LOOPING ALREADY ENABLED
+    // SECOND BUFFER IF LOOPING
     // ========================================================
 
     if (looping[playerIndex])
@@ -2029,8 +1917,7 @@ void PlaySong(int playerIndex)
 
         if (!looping[playerIndex])
         {
-            bool anythingQueued =
-                false;
+            bool anythingQueued = false;
 
             for (
                 int i = 0;
@@ -2187,235 +2074,234 @@ LRESULT CALLBACK WindowProcedure(
             int id =
                 LOWORD(wParam);
 
-            for (
-                int p = 0;
-                p < PLAYER_COUNT;
-                ++p)
+            // Since there is only one player,
+            // all controls belong to player 0.
+
+            const int p = 0;
+
+            // ------------------------------------------------
+            // PLAY / STOP
+            // ------------------------------------------------
+
+            if (
+                id ==
+                PlayerButtonID(
+                    ID_PLAY_BASE,
+                    p
+                ))
             {
-                // --------------------------------------------
-                // PLAY / STOP
-                // --------------------------------------------
-
-                if (
-                    id ==
-                    PlayerButtonID(
-                        ID_PLAY_BASE,
-                        p
-                    ))
+                if (!playing[p])
                 {
-                    if (!playing[p])
-                    {
-                        stopRequested[p] =
-                            false;
-
-                        SetWindowTextA(
-                            playButton[p],
-                            "STOP"
-                        );
-
-                        std::thread(
-                            PlaySong,
-                            p
-                        ).detach();
-                    }
-                    else
-                    {
-                        stopRequested[p] =
-                            true;
-
-                        SetWindowTextA(
-                            playButton[p],
-                            "PLAY"
-                        );
-                    }
-
-                    break;
-                }
-
-                // --------------------------------------------
-                // LOOP
-                // --------------------------------------------
-
-                if (
-                    id ==
-                    PlayerButtonID(
-                        ID_LOOP_BASE,
-                        p
-                    ))
-                {
-                    looping[p] =
-                        !looping[p];
+                    stopRequested[p] =
+                        false;
 
                     SetWindowTextA(
-                        loopButton[p],
-                        looping[p]
-                            ? "LOOP: ON"
-                            : "LOOP: OFF"
+                        playButton[p],
+                        "STOP"
                     );
 
-                    break;
-                }
-
-                // --------------------------------------------
-                // VOLUME BOOST
-                // --------------------------------------------
-
-                if (
-                    id ==
-                    PlayerButtonID(
-                        ID_BOOST_BASE,
+                    std::thread(
+                        PlaySong,
                         p
-                    ))
+                    ).detach();
+                }
+                else
                 {
-                    int level =
-                        volumeBoost[p].load();
+                    stopRequested[p] =
+                        true;
 
-                    level++;
-
-                    if (level > 3)
-                        level = 0;
-
-                    volumeBoost[p] =
-                        level;
-
-                    UpdateBoostDisplay(
-                        p
+                    SetWindowTextA(
+                        playButton[p],
+                        "PLAY"
                     );
-
-                    break;
                 }
 
-                // --------------------------------------------
-                // TEMPO MINUS
-                // --------------------------------------------
+                break;
+            }
 
-                if (
-                    id ==
-                    PlayerButtonID(
-                        ID_TEMPO_MINUS_BASE,
-                        p
-                    ))
-                {
-                    double tempo =
-                        currentTempo[p].load();
+            // ------------------------------------------------
+            // LOOP
+            // ------------------------------------------------
 
-                    tempo -=
-                        TEMPO_STEP;
+            if (
+                id ==
+                PlayerButtonID(
+                    ID_LOOP_BASE,
+                    p
+                ))
+            {
+                looping[p] =
+                    !looping[p];
 
-                    tempo =
-                        std::max(
-                            MIN_TEMPO,
-                            tempo
-                        );
+                SetWindowTextA(
+                    loopButton[p],
+                    looping[p]
+                        ? "LOOP ON"
+                        : "LOOP OFF"
+                );
 
-                    currentTempo[p] =
-                        tempo;
+                break;
+            }
 
-                    UpdateTempoDisplay(
-                        p
+            // ------------------------------------------------
+            // BOOST
+            // ------------------------------------------------
+
+            if (
+                id ==
+                PlayerButtonID(
+                    ID_BOOST_BASE,
+                    p
+                ))
+            {
+                int level =
+                    volumeBoost[p].load();
+
+                level++;
+
+                if (level > 3)
+                    level = 0;
+
+                volumeBoost[p] =
+                    level;
+
+                UpdateBoostDisplay(
+                    p
+                );
+
+                break;
+            }
+
+            // ------------------------------------------------
+            // TEMPO MINUS
+            // ------------------------------------------------
+
+            if (
+                id ==
+                PlayerButtonID(
+                    ID_TEMPO_MINUS_BASE,
+                    p
+                ))
+            {
+                double tempo =
+                    currentTempo[p].load();
+
+                tempo -=
+                    TEMPO_STEP;
+
+                tempo =
+                    std::max(
+                        MIN_TEMPO,
+                        tempo
                     );
 
-                    break;
-                }
+                currentTempo[p] =
+                    tempo;
 
-                // --------------------------------------------
-                // TEMPO PLUS
-                // --------------------------------------------
+                UpdateTempoDisplay(
+                    p
+                );
 
-                if (
-                    id ==
-                    PlayerButtonID(
-                        ID_TEMPO_PLUS_BASE,
-                        p
-                    ))
-                {
-                    double tempo =
-                        currentTempo[p].load();
+                break;
+            }
 
-                    tempo +=
-                        TEMPO_STEP;
+            // ------------------------------------------------
+            // TEMPO PLUS
+            // ------------------------------------------------
 
-                    tempo =
-                        std::min(
-                            MAX_TEMPO,
-                            tempo
-                        );
+            if (
+                id ==
+                PlayerButtonID(
+                    ID_TEMPO_PLUS_BASE,
+                    p
+                ))
+            {
+                double tempo =
+                    currentTempo[p].load();
 
-                    currentTempo[p] =
-                        tempo;
+                tempo +=
+                    TEMPO_STEP;
 
-                    UpdateTempoDisplay(
-                        p
+                tempo =
+                    std::min(
+                        MAX_TEMPO,
+                        tempo
                     );
 
-                    break;
-                }
+                currentTempo[p] =
+                    tempo;
 
-                // --------------------------------------------
-                // PITCH MINUS
-                // --------------------------------------------
+                UpdateTempoDisplay(
+                    p
+                );
 
-                if (
-                    id ==
-                    PlayerButtonID(
-                        ID_PITCH_MINUS_BASE,
-                        p
-                    ))
-                {
-                    int pitch =
-                        currentPitch[p].load();
+                break;
+            }
 
-                    pitch -=
-                        PITCH_STEP;
+            // ------------------------------------------------
+            // PITCH MINUS
+            // ------------------------------------------------
 
-                    pitch =
-                        std::max(
-                            MIN_PITCH,
-                            pitch
-                        );
+            if (
+                id ==
+                PlayerButtonID(
+                    ID_PITCH_MINUS_BASE,
+                    p
+                ))
+            {
+                int pitch =
+                    currentPitch[p].load();
 
-                    currentPitch[p] =
-                        pitch;
+                pitch -=
+                    PITCH_STEP;
 
-                    UpdatePitchDisplay(
-                        p
+                pitch =
+                    std::max(
+                        MIN_PITCH,
+                        pitch
                     );
 
-                    break;
-                }
+                currentPitch[p] =
+                    pitch;
 
-                // --------------------------------------------
-                // PITCH PLUS
-                // --------------------------------------------
+                UpdatePitchDisplay(
+                    p
+                );
 
-                if (
-                    id ==
-                    PlayerButtonID(
-                        ID_PITCH_PLUS_BASE,
-                        p
-                    ))
-                {
-                    int pitch =
-                        currentPitch[p].load();
+                break;
+            }
 
-                    pitch +=
-                        PITCH_STEP;
+            // ------------------------------------------------
+            // PITCH PLUS
+            // ------------------------------------------------
 
-                    pitch =
-                        std::min(
-                            MAX_PITCH,
-                            pitch
-                        );
+            if (
+                id ==
+                PlayerButtonID(
+                    ID_PITCH_PLUS_BASE,
+                    p
+                ))
+            {
+                int pitch =
+                    currentPitch[p].load();
 
-                    currentPitch[p] =
-                        pitch;
+                pitch +=
+                    PITCH_STEP;
 
-                    UpdatePitchDisplay(
-                        p
+                pitch =
+                    std::min(
+                        MAX_PITCH,
+                        pitch
                     );
 
-                    break;
-                }
+                currentPitch[p] =
+                    pitch;
+
+                UpdatePitchDisplay(
+                    p
+                );
+
+                break;
             }
 
             break;
@@ -2430,197 +2316,6 @@ LRESULT CALLBACK WindowProcedure(
             SetWindowTextA(
                 playButton[0],
                 "PLAY"
-            );
-
-            break;
-        }
-
-        // ====================================================
-        // VERTICAL SCROLL
-        // ====================================================
-
-        case WM_VSCROLL:
-        {
-            SCROLLINFO si = {};
-
-            si.cbSize =
-                sizeof(SCROLLINFO);
-
-            si.fMask =
-                SIF_ALL;
-
-            GetScrollInfo(
-                window,
-                SB_VERT,
-                &si
-            );
-
-            int oldPos =
-                si.nPos;
-
-            int newPos =
-                oldPos;
-
-            switch (
-                LOWORD(wParam))
-            {
-                case SB_LINEUP:
-                    newPos -= 40;
-                    break;
-
-                case SB_LINEDOWN:
-                    newPos += 40;
-                    break;
-
-                case SB_PAGEUP:
-                    newPos -=
-                        static_cast<int>(
-                            si.nPage
-                        );
-                    break;
-
-                case SB_PAGEDOWN:
-                    newPos +=
-                        static_cast<int>(
-                            si.nPage
-                        );
-                    break;
-
-                case SB_THUMBTRACK:
-                    newPos =
-                        si.nTrackPos;
-                    break;
-
-                case SB_TOP:
-                    newPos =
-                        si.nMin;
-                    break;
-
-                case SB_BOTTOM:
-                    newPos =
-                        si.nMax;
-                    break;
-
-                default:
-                    break;
-            }
-
-            int maxPos =
-                si.nMax -
-                static_cast<int>(
-                    si.nPage
-                ) +
-                1;
-
-            if (maxPos < 0)
-                maxPos = 0;
-
-            newPos =
-                std::max(
-                    si.nMin,
-                    std::min(
-                        newPos,
-                        maxPos
-                    )
-                );
-
-            if (newPos != oldPos)
-            {
-                scrollY =
-                    newPos;
-
-                SetScrollPos(
-                    window,
-                    SB_VERT,
-                    scrollY,
-                    TRUE
-                );
-
-                ResizePlayerControls(
-                    window
-                );
-
-                InvalidateRect(
-                    window,
-                    nullptr,
-                    TRUE
-                );
-            }
-
-            break;
-        }
-
-        // ====================================================
-        // MOUSE WHEEL
-        // ====================================================
-
-        case WM_MOUSEWHEEL:
-        {
-            int delta =
-                GET_WHEEL_DELTA_WPARAM(
-                    wParam
-                );
-
-            SCROLLINFO si = {};
-
-            si.cbSize =
-                sizeof(SCROLLINFO);
-
-            si.fMask =
-                SIF_ALL;
-
-            GetScrollInfo(
-                window,
-                SB_VERT,
-                &si
-            );
-
-            int amount =
-                delta > 0
-                    ? -80
-                    : 80;
-
-            int newPos =
-                si.nPos +
-                amount;
-
-            int maxPos =
-                si.nMax -
-                static_cast<int>(
-                    si.nPage
-                ) +
-                1;
-
-            if (maxPos < 0)
-                maxPos = 0;
-
-            newPos =
-                std::max(
-                    0,
-                    std::min(
-                        newPos,
-                        maxPos
-                    )
-                );
-
-            scrollY =
-                newPos;
-
-            SetScrollPos(
-                window,
-                SB_VERT,
-                scrollY,
-                TRUE
-            );
-
-            ResizePlayerControls(
-                window
-            );
-
-            InvalidateRect(
-                window,
-                nullptr,
-                TRUE
             );
 
             break;
@@ -2666,6 +2361,7 @@ LRESULT CALLBACK WindowProcedure(
                 &rect
             );
 
+            // Background
             HBRUSH backgroundBrush =
                 CreateSolidBrush(
                     BACKGROUND
@@ -2681,32 +2377,10 @@ LRESULT CALLBACK WindowProcedure(
                 backgroundBrush
             );
 
-            DrawPlayerSections(
+            // Player panel
+            DrawPlayerSection(
                 dc,
                 rect
-            );
-
-            RECT topBar =
-            {
-                0,
-                0,
-                rect.right,
-                TOP_BAR_HEIGHT
-            };
-
-            HBRUSH topBrush =
-                CreateSolidBrush(
-                    RGB(10, 10, 14)
-                );
-
-            FillRect(
-                dc,
-                &topBar,
-                topBrush
-            );
-
-            DeleteObject(
-                topBrush
             );
 
             EndPaint(
@@ -2723,14 +2397,8 @@ LRESULT CALLBACK WindowProcedure(
 
         case WM_DESTROY:
         {
-            for (
-                int i = 0;
-                i < PLAYER_COUNT;
-                ++i)
-            {
-                stopRequested[i] =
-                    true;
-            }
+            stopRequested[0] =
+                true;
 
             if (editBrush)
             {
@@ -2774,30 +2442,29 @@ int WINAPI WinMain(
     int)
 {
     const char CLASS_NAME[] =
-        "CppSongMaker1";
+        "CppSongMakerOnePlayer";
 
     // ========================================================
     // INITIAL STATE
     // ========================================================
 
-    for (
-        int i = 0;
-        i < PLAYER_COUNT;
-        ++i)
-    {
-        playing[i] = false;
-        looping[i] = false;
-        stopRequested[i] = false;
+    playing[0] =
+        false;
 
-        currentTempo[i] =
-            120.0;
+    looping[0] =
+        false;
 
-        currentPitch[i] =
-            0;
+    stopRequested[0] =
+        false;
 
-        volumeBoost[i] =
-            0;
-    }
+    currentTempo[0] =
+        120.0;
+
+    currentPitch[0] =
+        0;
+
+    volumeBoost[0] =
+        0;
 
     // ========================================================
     // EDIT BRUSH
@@ -2846,13 +2513,12 @@ int WINAPI WinMain(
         CreateWindowExA(
             WS_EX_COMPOSITED,
             CLASS_NAME,
-            "C++ Song Maker - 1 Player",
-            WS_OVERLAPPEDWINDOW |
-            WS_VSCROLL,
+            "C++ Song Maker - One Player",
+            WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             1150,
-            850,
+            750,
             nullptr,
             nullptr,
             instance,
@@ -2866,289 +2532,283 @@ int WINAPI WinMain(
         window;
 
     // ========================================================
-    // CREATE ONE PLAYER
+    // PLAYER 0 CONTROL IDS
     // ========================================================
 
-    for (
-        int i = 0;
-        i < PLAYER_COUNT;
-        ++i)
-    {
-        int playID =
-            PlayerButtonID(
-                ID_PLAY_BASE,
-                i
-            );
-
-        int loopID =
-            PlayerButtonID(
-                ID_LOOP_BASE,
-                i
-            );
-
-        int boostID =
-            PlayerButtonID(
-                ID_BOOST_BASE,
-                i
-            );
-
-        int tempoMinusID =
-            PlayerButtonID(
-                ID_TEMPO_MINUS_BASE,
-                i
-            );
-
-        int tempoPlusID =
-            PlayerButtonID(
-                ID_TEMPO_PLUS_BASE,
-                i
-            );
-
-        int pitchMinusID =
-            PlayerButtonID(
-                ID_PITCH_MINUS_BASE,
-                i
-            );
-
-        int pitchPlusID =
-            PlayerButtonID(
-                ID_PITCH_PLUS_BASE,
-                i
-            );
-
-        // ----------------------------------------------------
-        // PLAY
-        // ----------------------------------------------------
-
-        playButton[i] =
-            CreateWindowA(
-                "BUTTON",
-                "PLAY",
-                WS_VISIBLE |
-                WS_CHILD |
-                BS_PUSHBUTTON,
-                0,
-                0,
-                100,
-                40,
-                window,
-                (HMENU)(INT_PTR)
-                    playID,
-                instance,
-                nullptr
-            );
-
-        // ----------------------------------------------------
-        // LOOP
-        // ----------------------------------------------------
-
-        loopButton[i] =
-            CreateWindowA(
-                "BUTTON",
-                "LOOP: OFF",
-                WS_VISIBLE |
-                WS_CHILD |
-                BS_PUSHBUTTON,
-                0,
-                0,
-                100,
-                35,
-                window,
-                (HMENU)(INT_PTR)
-                    loopID,
-                instance,
-                nullptr
-            );
-
-        // ----------------------------------------------------
-        // VOLUME BOOST
-        // ----------------------------------------------------
-
-        boostButton[i] =
-            CreateWindowA(
-                "BUTTON",
-                "BOOST: 1.0x",
-                WS_VISIBLE |
-                WS_CHILD |
-                BS_PUSHBUTTON,
-                0,
-                0,
-                100,
-                35,
-                window,
-                (HMENU)(INT_PTR)
-                    boostID,
-                instance,
-                nullptr
-            );
-
-        // ----------------------------------------------------
-        // TEMPO MINUS
-        // ----------------------------------------------------
-
-        tempoMinusButton[i] =
-            CreateWindowA(
-                "BUTTON",
-                "-",
-                WS_VISIBLE |
-                WS_CHILD |
-                BS_PUSHBUTTON,
-                0,
-                0,
-                40,
-                35,
-                window,
-                (HMENU)(INT_PTR)
-                    tempoMinusID,
-                instance,
-                nullptr
-            );
-
-        // ----------------------------------------------------
-        // TEMPO LABEL
-        // ----------------------------------------------------
-
-        tempoLabel[i] =
-            CreateWindowA(
-                "STATIC",
-                "TEMPO: 120",
-                WS_VISIBLE |
-                WS_CHILD |
-                SS_CENTER |
-                SS_CENTERIMAGE,
-                0,
-                0,
-                100,
-                35,
-                window,
-                nullptr,
-                instance,
-                nullptr
-            );
-
-        // ----------------------------------------------------
-        // TEMPO PLUS
-        // ----------------------------------------------------
-
-        tempoPlusButton[i] =
-            CreateWindowA(
-                "BUTTON",
-                "+",
-                WS_VISIBLE |
-                WS_CHILD |
-                BS_PUSHBUTTON,
-                0,
-                0,
-                100,
-                35,
-                window,
-                (HMENU)(INT_PTR)
-                    tempoPlusID,
-                instance,
-                nullptr
-            );
-
-        // ----------------------------------------------------
-        // PITCH MINUS
-        // ----------------------------------------------------
-
-        pitchMinusButton[i] =
-            CreateWindowA(
-                "BUTTON",
-                "-",
-                WS_VISIBLE |
-                WS_CHILD |
-                BS_PUSHBUTTON,
-                0,
-                0,
-                40,
-                35,
-                window,
-                (HMENU)(INT_PTR)
-                    pitchMinusID,
-                instance,
-                nullptr
-            );
-
-        // ----------------------------------------------------
-        // PITCH LABEL
-        // ----------------------------------------------------
-
-        pitchLabel[i] =
-            CreateWindowA(
-                "STATIC",
-                "PITCH: 0",
-                WS_VISIBLE |
-                WS_CHILD |
-                SS_CENTER |
-                SS_CENTERIMAGE,
-                0,
-                0,
-                100,
-                35,
-                window,
-                nullptr,
-                instance,
-                nullptr
-            );
-
-        // ----------------------------------------------------
-        // PITCH PLUS
-        // ----------------------------------------------------
-
-        pitchPlusButton[i] =
-            CreateWindowA(
-                "BUTTON",
-                "+",
-                WS_VISIBLE |
-                WS_CHILD |
-                BS_PUSHBUTTON,
-                0,
-                0,
-                100,
-                35,
-                window,
-                (HMENU)(INT_PTR)
-                    pitchPlusID,
-                instance,
-                nullptr
-            );
-
-        // ----------------------------------------------------
-        // SONG EDITOR
-        // ----------------------------------------------------
-
-        songEditor[i] =
-            CreateWindowExA(
-                WS_EX_CLIENTEDGE,
-                "EDIT",
-                "",
-                WS_VISIBLE |
-                WS_CHILD |
-                WS_VSCROLL |
-                ES_MULTILINE |
-                ES_AUTOVSCROLL |
-                ES_WANTRETURN |
-                ES_NOHIDESEL,
-                0,
-                0,
-                200,
-                EDIT_HEIGHT,
-                window,
-                nullptr,
-                instance,
-                nullptr
-            );
-
-        SendMessageA(
-            songEditor[i],
-            WM_SETFONT,
-            (WPARAM)GetStockObject(
-                DEFAULT_GUI_FONT
-            ),
-            TRUE
+    int playID =
+        PlayerButtonID(
+            ID_PLAY_BASE,
+            0
         );
-    }
+
+    int loopID =
+        PlayerButtonID(
+            ID_LOOP_BASE,
+            0
+        );
+
+    int boostID =
+        PlayerButtonID(
+            ID_BOOST_BASE,
+            0
+        );
+
+    int tempoMinusID =
+        PlayerButtonID(
+            ID_TEMPO_MINUS_BASE,
+            0
+        );
+
+    int tempoPlusID =
+        PlayerButtonID(
+            ID_TEMPO_PLUS_BASE,
+            0
+        );
+
+    int pitchMinusID =
+        PlayerButtonID(
+            ID_PITCH_MINUS_BASE,
+            0
+        );
+
+    int pitchPlusID =
+        PlayerButtonID(
+            ID_PITCH_PLUS_BASE,
+            0
+        );
+
+    // ========================================================
+    // PLAY BUTTON
+    // ========================================================
+
+    playButton[0] =
+        CreateWindowA(
+            "BUTTON",
+            "PLAY",
+            WS_VISIBLE |
+            WS_CHILD |
+            BS_PUSHBUTTON,
+            0,
+            0,
+            65,
+            SMALL_BUTTON_HEIGHT,
+            window,
+            (HMENU)(INT_PTR)
+                playID,
+            instance,
+            nullptr
+        );
+
+    // ========================================================
+    // LOOP BUTTON
+    // ========================================================
+
+    loopButton[0] =
+        CreateWindowA(
+            "BUTTON",
+            "LOOP OFF",
+            WS_VISIBLE |
+            WS_CHILD |
+            BS_PUSHBUTTON,
+            0,
+            0,
+            75,
+            SMALL_BUTTON_HEIGHT,
+            window,
+            (HMENU)(INT_PTR)
+                loopID,
+            instance,
+            nullptr
+        );
+
+    // ========================================================
+    // BOOST BUTTON
+    // ========================================================
+
+    boostButton[0] =
+        CreateWindowA(
+            "BUTTON",
+            "BOOST 1.0x",
+            WS_VISIBLE |
+            WS_CHILD |
+            BS_PUSHBUTTON,
+            0,
+            0,
+            80,
+            SMALL_BUTTON_HEIGHT,
+            window,
+            (HMENU)(INT_PTR)
+                boostID,
+            instance,
+            nullptr
+        );
+
+    // ========================================================
+    // TEMPO MINUS
+    // ========================================================
+
+    tempoMinusButton[0] =
+        CreateWindowA(
+            "BUTTON",
+            "-",
+            WS_VISIBLE |
+            WS_CHILD |
+            BS_PUSHBUTTON,
+            0,
+            0,
+            28,
+            SMALL_BUTTON_HEIGHT,
+            window,
+            (HMENU)(INT_PTR)
+                tempoMinusID,
+            instance,
+            nullptr
+        );
+
+    // ========================================================
+    // TEMPO LABEL
+    // ========================================================
+
+    tempoLabel[0] =
+        CreateWindowA(
+            "STATIC",
+            "TEMPO: 120",
+            WS_VISIBLE |
+            WS_CHILD |
+            SS_CENTER |
+            SS_CENTERIMAGE,
+            0,
+            0,
+            90,
+            SMALL_BUTTON_HEIGHT,
+            window,
+            nullptr,
+            instance,
+            nullptr
+        );
+
+    // ========================================================
+    // TEMPO PLUS
+    // ========================================================
+
+    tempoPlusButton[0] =
+        CreateWindowA(
+            "BUTTON",
+            "+",
+            WS_VISIBLE |
+            WS_CHILD |
+            BS_PUSHBUTTON,
+            0,
+            0,
+            28,
+            SMALL_BUTTON_HEIGHT,
+            window,
+            (HMENU)(INT_PTR)
+                tempoPlusID,
+            instance,
+            nullptr
+        );
+
+    // ========================================================
+    // PITCH MINUS
+    // ========================================================
+
+    pitchMinusButton[0] =
+        CreateWindowA(
+            "BUTTON",
+            "-",
+            WS_VISIBLE |
+            WS_CHILD |
+            BS_PUSHBUTTON,
+            0,
+            0,
+            28,
+            SMALL_BUTTON_HEIGHT,
+            window,
+            (HMENU)(INT_PTR)
+                pitchMinusID,
+            instance,
+            nullptr
+        );
+
+    // ========================================================
+    // PITCH LABEL
+    // ========================================================
+
+    pitchLabel[0] =
+        CreateWindowA(
+            "STATIC",
+            "PITCH: 0",
+            WS_VISIBLE |
+            WS_CHILD |
+            SS_CENTER |
+            SS_CENTERIMAGE,
+            0,
+            0,
+            80,
+            SMALL_BUTTON_HEIGHT,
+            window,
+            nullptr,
+            instance,
+            nullptr
+        );
+
+    // ========================================================
+    // PITCH PLUS
+    // ========================================================
+
+    pitchPlusButton[0] =
+        CreateWindowA(
+            "BUTTON",
+            "+",
+            WS_VISIBLE |
+            WS_CHILD |
+            BS_PUSHBUTTON,
+            0,
+            0,
+            28,
+            SMALL_BUTTON_HEIGHT,
+            window,
+            (HMENU)(INT_PTR)
+                pitchPlusID,
+            instance,
+            nullptr
+        );
+
+    // ========================================================
+    // SONG EDITOR
+    // ========================================================
+
+    songEditor[0] =
+        CreateWindowExA(
+            WS_EX_CLIENTEDGE,
+            "EDIT",
+            "",
+            WS_VISIBLE |
+            WS_CHILD |
+            WS_VSCROLL |
+            ES_MULTILINE |
+            ES_AUTOVSCROLL |
+            ES_WANTRETURN |
+            ES_NOHIDESEL,
+            0,
+            0,
+            500,
+            EDIT_HEIGHT,
+            window,
+            nullptr,
+            instance,
+            nullptr
+        );
+
+    SendMessageA(
+        songEditor[0],
+        WM_SETFONT,
+        (WPARAM)GetStockObject(
+            DEFAULT_GUI_FONT
+        ),
+        TRUE
+    );
 
     // ========================================================
     // INITIAL LAYOUT
@@ -3159,7 +2819,7 @@ int WINAPI WinMain(
     );
 
     // ========================================================
-    // SHOW
+    // SHOW WINDOW
     // ========================================================
 
     ShowWindow(
