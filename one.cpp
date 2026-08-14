@@ -20,8 +20,7 @@
 
 const int SAMPLE_RATE = 44100;
 
-const double PI =
-    3.14159265358979323846;
+const double PI = 3.14159265358979323846;
 
 const double MIN_TEMPO = 40.0;
 const double MAX_TEMPO = 480.0;
@@ -39,26 +38,13 @@ const double MASTER_GAIN = 2.5;
 // COLORS
 // ============================================================
 
-const COLORREF BACKGROUND =
-    RGB(0, 207, 74);
-
-const COLORREF COLUMN =
-    RGB(32, 32, 38);
-
-const COLORREF COLUMN_BORDER =
-    RGB(55, 55, 65);
-
-const COLORREF TEXT_COLOR =
-    RGB(255, 255, 255);
-
-const COLORREF BUTTON_TEXT =
-    RGB(0, 255, 0);
-
-const COLORREF EDIT_BACKGROUND =
-    RGB(15, 15, 20);
-
-const COLORREF EDIT_TEXT =
-    RGB(255, 255, 255);
+const COLORREF BACKGROUND = RGB(0, 207, 74);
+const COLORREF COLUMN = RGB(32, 32, 38);
+const COLORREF COLUMN_BORDER = RGB(55, 55, 65);
+const COLORREF TEXT_COLOR = RGB(255, 255, 255);
+const COLORREF BUTTON_TEXT = RGB(0, 255, 0);
+const COLORREF EDIT_BACKGROUND = RGB(15, 15, 20);
+const COLORREF EDIT_TEXT = RGB(255, 255, 255);
 
 // ============================================================
 // MAIN WINDOW
@@ -72,6 +58,7 @@ HWND boostButton = nullptr;
 
 HWND instrumentsButton = nullptr;
 HWND chordsButton = nullptr;
+HWND drumsButton = nullptr;
 
 HWND tempoMinusButton = nullptr;
 HWND tempoPlusButton = nullptr;
@@ -106,19 +93,14 @@ std::atomic<int> volumeBoost(0);
 const int LEFT_MARGIN = 15;
 
 const int EDITOR_TOP = 205;
-
 const int EDITOR_HEIGHT = 350;
 
 const int TRACK_TOP = 580;
-
 const int TRACK_BUTTON_HEIGHT = 36;
-
 const int TRACK_GAP = 8;
-
 const int BOTTOM_MARGIN = 30;
 
 int scrollY = 0;
-
 int contentHeight = 900;
 
 // ============================================================
@@ -137,25 +119,26 @@ const UINT ID_BOOST = 1002;
 
 const UINT ID_INSTRUMENTS = 1003;
 const UINT ID_CHORDS = 1004;
+const UINT ID_DRUMS = 1005;
 
-const UINT ID_TEMPO_MINUS = 1005;
-const UINT ID_TEMPO_PLUS = 1006;
+const UINT ID_TEMPO_MINUS = 1006;
+const UINT ID_TEMPO_PLUS = 1007;
 
-const UINT ID_PITCH_MINUS = 1007;
-const UINT ID_PITCH_PLUS = 1008;
+const UINT ID_PITCH_MINUS = 1008;
+const UINT ID_PITCH_PLUS = 1009;
 
-const UINT ID_SAVE_TRACK = 1009;
+const UINT ID_SAVE_TRACK = 1010;
 
 const UINT ID_LOAD_TRACK_BASE = 3000;
 const UINT ID_PLAY_TRACK_BASE = 4000;
 
-// Dynamically generated menu IDs.
 const UINT ID_NOTE_BASE = 10000;
 const UINT ID_CHORD_BASE = 20000;
+const UINT ID_DRUM_BASE = 30000;
 
 std::map<UINT, std::string> noteCommands;
-
 std::map<UINT, std::string> chordCommands;
+std::map<UINT, std::string> drumCommands;
 
 // ============================================================
 // RANDOM NOISE
@@ -195,80 +178,32 @@ struct DrumEvent
 // NOTE FREQUENCY
 // ============================================================
 
-double noteFrequency(
-    const std::string& note)
+double noteFrequency(const std::string& note)
 {
-    static const std::map<std::string, double>
-        frequencies =
+    static const std::map<std::string, double> frequencies =
     {
-        {"C2", 65.41},
-        {"C#2", 69.30},
-        {"D2", 73.42},
-        {"D#2", 77.78},
-        {"E2", 82.41},
-        {"F2", 87.31},
-        {"F#2", 92.50},
-        {"G2", 98.00},
-        {"G#2", 103.83},
-        {"A2", 110.00},
-        {"A#2", 116.54},
-        {"B2", 123.47},
+        {"C2",65.41},{"C#2",69.30},{"D2",73.42},{"D#2",77.78},
+        {"E2",82.41},{"F2",87.31},{"F#2",92.50},{"G2",98.00},
+        {"G#2",103.83},{"A2",110.00},{"A#2",116.54},{"B2",123.47},
 
-        {"C3", 130.81},
-        {"C#3", 138.59},
-        {"D3", 146.83},
-        {"D#3", 155.56},
-        {"E3", 164.81},
-        {"F3", 174.61},
-        {"F#3", 185.00},
-        {"G3", 196.00},
-        {"G#3", 207.65},
-        {"A3", 220.00},
-        {"A#3", 233.08},
-        {"B3", 246.94},
+        {"C3",130.81},{"C#3",138.59},{"D3",146.83},{"D#3",155.56},
+        {"E3",164.81},{"F3",174.61},{"F#3",185.00},{"G3",196.00},
+        {"G#3",207.65},{"A3",220.00},{"A#3",233.08},{"B3",246.94},
 
-        {"C4", 261.63},
-        {"C#4", 277.18},
-        {"D4", 293.66},
-        {"D#4", 311.13},
-        {"E4", 329.63},
-        {"F4", 349.23},
-        {"F#4", 369.99},
-        {"G4", 392.00},
-        {"G#4", 415.30},
-        {"A4", 440.00},
-        {"A#4", 466.16},
-        {"B4", 493.88},
+        {"C4",261.63},{"C#4",277.18},{"D4",293.66},{"D#4",311.13},
+        {"E4",329.63},{"F4",349.23},{"F#4",369.99},{"G4",392.00},
+        {"G#4",415.30},{"A4",440.00},{"A#4",466.16},{"B4",493.88},
 
-        {"C5", 523.25},
-        {"C#5", 554.37},
-        {"D5", 587.33},
-        {"D#5", 622.25},
-        {"E5", 659.25},
-        {"F5", 698.46},
-        {"F#5", 739.99},
-        {"G5", 783.99},
-        {"G#5", 830.61},
-        {"A5", 880.00},
-        {"A#5", 932.33},
-        {"B5", 987.77},
+        {"C5",523.25},{"C#5",554.37},{"D5",587.33},{"D#5",622.25},
+        {"E5",659.25},{"F5",698.46},{"F#5",739.99},{"G5",783.99},
+        {"G#5",830.61},{"A5",880.00},{"A#5",932.33},{"B5",987.77},
 
-        {"C6", 1046.50},
-        {"C#6", 1108.73},
-        {"D6", 1174.66},
-        {"D#6", 1244.51},
-        {"E6", 1318.51},
-        {"F6", 1396.91},
-        {"F#6", 1479.98},
-        {"G6", 1567.98},
-        {"G#6", 1661.22},
-        {"A6", 1760.00},
-        {"A#6", 1864.66},
-        {"B6", 1975.53}
+        {"C6",1046.50},{"C#6",1108.73},{"D6",1174.66},{"D#6",1244.51},
+        {"E6",1318.51},{"F6",1396.91},{"F#6",1479.98},{"G6",1567.98},
+        {"G#6",1661.22},{"A6",1760.00},{"A#6",1864.66},{"B6",1975.53}
     };
 
-    auto found =
-        frequencies.find(note);
+    auto found = frequencies.find(note);
 
     if (found != frequencies.end())
         return found->second;
@@ -286,18 +221,8 @@ std::vector<std::string> GetNotes()
 
     const char* noteNames[] =
     {
-        "C",
-        "C#",
-        "D",
-        "D#",
-        "E",
-        "F",
-        "F#",
-        "G",
-        "G#",
-        "A",
-        "A#",
-        "B"
+        "C","C#","D","D#","E","F",
+        "F#","G","G#","A","A#","B"
     };
 
     for (int octave = 2; octave <= 6; ++octave)
@@ -366,9 +291,7 @@ double instrumentWave(
                 std::sin(phase * 2.0) * 0.35 +
                 std::sin(phase * 3.0) * 0.15 +
                 std::sin(phase * 4.0) * 0.06
-            )
-            *
-            envelope;
+            ) * envelope;
     }
 
     if (instrument == "BASS")
@@ -381,9 +304,7 @@ double instrumentWave(
                 std::sin(phase) * 0.9 +
                 std::sin(phase * 2.0) * 0.25 +
                 std::sin(phase * 3.0) * 0.08
-            )
-            *
-            envelope;
+            ) * envelope;
     }
 
     if (instrument == "GUITAR")
@@ -443,8 +364,7 @@ double instrumentWave(
             (
                 std::sin(phase) * 0.85 +
                 std::sin(phase * 2.0) * 0.10
-            )
-            *
+            ) *
             std::exp(-0.8 * t);
     }
 
@@ -483,9 +403,7 @@ double instrumentWave(
                 std::sin(phase) +
                 std::sin(phase * 2.71) * 0.4 +
                 std::sin(phase * 4.13) * 0.2
-            )
-            *
-            envelope;
+            ) * envelope;
     }
 
     return std::sin(phase);
@@ -502,8 +420,7 @@ double kick(double t)
 
     double frequency =
         180.0 *
-        std::exp(-18.0 * t)
-        +
+        std::exp(-18.0 * t) +
         42.0;
 
     double envelope =
@@ -518,8 +435,7 @@ double kick(double t)
             PI *
             frequency *
             t
-        )
-        *
+        ) *
         envelope *
         1.25
         +
@@ -545,10 +461,8 @@ double snare(double t)
             PI *
             180.0 *
             t
-        )
-        *
-        std::exp(-20.0 * t)
-        *
+        ) *
+        std::exp(-20.0 * t) *
         0.25;
 }
 
@@ -600,8 +514,7 @@ double clap(double t)
             burst1 +
             burst2 +
             burst3
-        )
-        *
+        ) *
         std::exp(-14.0 * t);
 }
 
@@ -614,8 +527,7 @@ double tom(
 
     double pitch =
         frequency *
-        std::exp(-3.0 * t)
-        +
+        std::exp(-3.0 * t) +
         frequency * 0.4;
 
     return
@@ -624,8 +536,7 @@ double tom(
             PI *
             pitch *
             t
-        )
-        *
+        ) *
         std::exp(-7.0 * t);
 }
 
@@ -656,10 +567,8 @@ double ride(double t)
                 PI *
                 3500.0 *
                 t
-            ) *
-            0.5
-        )
-        *
+            ) * 0.5
+        ) *
         envelope *
         0.4;
 }
@@ -678,8 +587,7 @@ double rimshot(double t)
             PI *
             1200.0 *
             t
-        )
-        *
+        ) *
         envelope *
         0.8
         +
@@ -711,8 +619,7 @@ double cowbell(double t)
                 800.0 *
                 t
             )
-        )
-        *
+        ) *
         envelope *
         0.4;
 }
@@ -802,8 +709,7 @@ double makeDrum(
 // UPPERCASE
 // ============================================================
 
-std::string upper(
-    std::string value)
+std::string upper(std::string value)
 {
     for (char& c : value)
     {
@@ -911,7 +817,7 @@ bool LoadSongText(
         else if (command == "DRUM")
         {
             std::string type;
-            double startBeat;
+            double startBeat = 0.0;
 
             input >>
                 type >>
@@ -1003,8 +909,7 @@ void InsertEditorText(
 // VOLUME MULTIPLIER
 // ============================================================
 
-double GetVolumeMultiplier(
-    int level)
+double GetVolumeMultiplier(int level)
 {
     switch (level)
     {
@@ -1034,11 +939,9 @@ bool GenerateAudio(
     std::vector<short>& samples)
 {
     std::vector<NoteEvent> notes;
-
     std::vector<DrumEvent> drums;
 
     double fileTempo;
-
     double loopLengthBeats;
 
     if (!LoadSongText(
@@ -1072,8 +975,7 @@ bool GenerateAudio(
     double pitchMultiplier =
         std::pow(
             2.0,
-            static_cast<double>(pitch) /
-            12.0
+            static_cast<double>(pitch) / 12.0
         );
 
     double secondsPerBeat =
@@ -1169,8 +1071,7 @@ bool GenerateAudio(
                         envelope,
                         std::max(
                             0.0,
-                            remaining /
-                            0.05
+                            remaining / 0.05
                         )
                     );
             }
@@ -1266,8 +1167,7 @@ bool GenerateAudio(
                 makeDrum(
                     drum.type,
                     time
-                )
-                *
+                ) *
                 drumVolume;
         }
     }
@@ -1279,9 +1179,7 @@ bool GenerateAudio(
     if (volumeMultiplier < 1.0)
         volumeMultiplier = 1.0;
 
-    samples.resize(
-        totalSamples
-    );
+    samples.resize(totalSamples);
 
     for (int i = 0;
          i < totalSamples;
@@ -1292,8 +1190,7 @@ bool GenerateAudio(
             MASTER_GAIN *
             volumeMultiplier;
 
-        value =
-            std::tanh(value);
+        value = std::tanh(value);
 
         samples[i] =
             static_cast<short>(
@@ -1357,8 +1254,7 @@ void PlaySongText(
 
     format.nBlockAlign =
         format.nChannels *
-        format.wBitsPerSample /
-        8;
+        format.wBitsPerSample / 8;
 
     format.nAvgBytesPerSec =
         format.nSamplesPerSec *
@@ -1435,8 +1331,7 @@ void PlaySongText(
 
             headers[index].dwBufferLength =
                 static_cast<DWORD>(
-                    audioSamples[index].size()
-                    *
+                    audioSamples[index].size() *
                     sizeof(short)
                 );
 
@@ -1445,8 +1340,7 @@ void PlaySongText(
                     audioDevice,
                     &headers[index],
                     sizeof(WAVEHDR)
-                )
-                != MMSYSERR_NOERROR)
+                ) != MMSYSERR_NOERROR)
             {
                 return false;
             }
@@ -1458,8 +1352,7 @@ void PlaySongText(
                     audioDevice,
                     &headers[index],
                     sizeof(WAVEHDR)
-                )
-                != MMSYSERR_NOERROR)
+                ) != MMSYSERR_NOERROR)
             {
                 waveOutUnprepareHeader(
                     audioDevice,
@@ -1510,12 +1403,8 @@ void PlaySongText(
             if (!queued[i])
                 continue;
 
-            if (
-                !(headers[i].dwFlags &
-                  WHDR_DONE))
-            {
+            if (!(headers[i].dwFlags & WHDR_DONE))
                 continue;
-            }
 
             didSomething = true;
 
@@ -1570,9 +1459,7 @@ void PlaySongText(
             Sleep(1);
     }
 
-    waveOutReset(
-        audioDevice
-    );
+    waveOutReset(audioDevice);
 
     for (int i = 0;
          i < AUDIO_BUFFER_COUNT;
@@ -1592,9 +1479,7 @@ void PlaySongText(
         queued[i] = false;
     }
 
-    waveOutClose(
-        audioDevice
-    );
+    waveOutClose(audioDevice);
 
     playing = false;
 }
@@ -1712,18 +1597,8 @@ std::vector<std::string> GetChordRoots()
 {
     return
     {
-        "C",
-        "C#",
-        "D",
-        "D#",
-        "E",
-        "F",
-        "F#",
-        "G",
-        "G#",
-        "A",
-        "A#",
-        "B"
+        "C","C#","D","D#","E","F",
+        "F#","G","G#","A","A#","B"
     };
 }
 
@@ -1751,18 +1626,8 @@ std::string NoteFromSemitone(
 {
     static const char* names[] =
     {
-        "C",
-        "C#",
-        "D",
-        "D#",
-        "E",
-        "F",
-        "F#",
-        "G",
-        "G#",
-        "A",
-        "A#",
-        "B"
+        "C","C#","D","D#","E","F",
+        "F#","G","G#","A","A#","B"
     };
 
     int octave =
@@ -1792,7 +1657,7 @@ std::vector<std::string> GetChordNotes(
     const std::string& type)
 {
     std::vector<std::string> roots =
-    GetChordRoots();
+        GetChordRoots();
 
     int rootIndex = 0;
 
@@ -1811,41 +1676,19 @@ std::vector<std::string> GetChordNotes(
 
     if (type == "MAJOR")
     {
-        intervals =
-        {
-            0,
-            4,
-            7
-        };
+        intervals = {0,4,7};
     }
     else if (type == "MINOR")
     {
-        intervals =
-        {
-            0,
-            3,
-            7
-        };
+        intervals = {0,3,7};
     }
     else if (type == "MINOR 7")
     {
-        intervals =
-        {
-            0,
-            3,
-            7,
-            10
-        };
+        intervals = {0,3,7,10};
     }
     else if (type == "MAJOR 7")
     {
-        intervals =
-        {
-            0,
-            4,
-            7,
-            11
-        };
+        intervals = {0,4,7,11};
     }
 
     std::vector<std::string> result;
@@ -1867,6 +1710,53 @@ std::vector<std::string> GetChordNotes(
 }
 
 // ============================================================
+// DRUM LIST
+// ============================================================
+
+std::vector<std::string> GetDrums()
+{
+    return
+    {
+        "KICK",
+        "SNARE",
+        "HIHAT",
+        "OPEN HIHAT",
+        "CLAP",
+        "LOW TOM",
+        "MID TOM",
+        "HIGH TOM",
+        "CRASH",
+        "RIDE",
+        "RIMSHOT",
+        "COWBELL",
+        "SHAKER",
+        "TAMBOURINE"
+    };
+}
+
+// ============================================================
+// DRUM TYPE TO COMMAND
+// ============================================================
+
+std::string DrumCommandName(
+    const std::string& displayName)
+{
+    if (displayName == "OPEN HIHAT")
+        return "OPEN_HIHAT";
+
+    if (displayName == "LOW TOM")
+        return "LOW_TOM";
+
+    if (displayName == "MID TOM")
+        return "MID_TOM";
+
+    if (displayName == "HIGH TOM")
+        return "HIGH_TOM";
+
+    return displayName;
+}
+
+// ============================================================
 // BUILD INSTRUMENT MENU
 // ============================================================
 
@@ -1875,13 +1765,11 @@ HMENU BuildInstrumentMenu()
     HMENU menu =
         CreatePopupMenu();
 
-    std::vector<std::string>
-        instruments =
-            GetInstruments();
+    std::vector<std::string> instruments =
+        GetInstruments();
 
-    std::vector<std::string>
-        notes =
-            GetNotes();
+    std::vector<std::string> notes =
+        GetNotes();
 
     for (const std::string& instrument :
          instruments)
@@ -1937,17 +1825,14 @@ HMENU BuildChordMenu()
     HMENU menu =
         CreatePopupMenu();
 
-    std::vector<std::string>
-        instruments =
-            GetInstruments();
+    std::vector<std::string> instruments =
+        GetInstruments();
 
-    std::vector<std::string>
-        roots =
-            GetChordRoots();
+    std::vector<std::string> roots =
+        GetChordRoots();
 
-    std::vector<std::string>
-        types =
-            GetChordTypes();
+    std::vector<std::string> types =
+        GetChordTypes();
 
     for (const std::string& instrument :
          instruments)
@@ -1970,12 +1855,11 @@ HMENU BuildChordMenu()
                         chordCommands.size()
                     );
 
-                std::vector<std::string>
-                    chordNotes =
-                        GetChordNotes(
-                            root,
-                            type
-                        );
+                std::vector<std::string> chordNotes =
+                    GetChordNotes(
+                        root,
+                        type
+                    );
 
                 std::string command;
 
@@ -2029,6 +1913,100 @@ HMENU BuildChordMenu()
 }
 
 // ============================================================
+// BUILD DRUM MENU
+// ============================================================
+
+HMENU BuildDrumMenu()
+{
+    HMENU menu =
+        CreatePopupMenu();
+
+    std::vector<std::string> drums =
+        GetDrums();
+
+    // Beat positions from 0 to 7.5.
+    for (const std::string& drum :
+         drums)
+    {
+        HMENU beatMenu =
+            CreatePopupMenu();
+
+        std::string drumType =
+            DrumCommandName(drum);
+
+        for (int i = 0; i < 16; ++i)
+        {
+            double beat =
+                static_cast<double>(i) * 0.5;
+
+            UINT id =
+                ID_DRUM_BASE +
+                static_cast<UINT>(
+                    drumCommands.size()
+                );
+
+            char beatText[32];
+
+            if (
+                std::fabs(
+                    beat -
+                    std::round(beat)
+                ) < 0.001)
+            {
+                std::snprintf(
+                    beatText,
+                    sizeof(beatText),
+                    "BEAT %d",
+                    static_cast<int>(
+                        beat
+                    )
+                );
+            }
+            else
+            {
+                std::snprintf(
+                    beatText,
+                    sizeof(beatText),
+                    "BEAT %.1f",
+                    beat
+                );
+            }
+
+            char commandText[128];
+
+            std::snprintf(
+                commandText,
+                sizeof(commandText),
+                "DRUM %s %.1f",
+                drumType.c_str(),
+                beat
+            );
+
+            drumCommands[id] =
+                commandText;
+
+            AppendMenuA(
+                beatMenu,
+                MF_STRING,
+                id,
+                beatText
+            );
+        }
+
+        AppendMenuA(
+            menu,
+            MF_POPUP,
+            reinterpret_cast<UINT_PTR>(
+                beatMenu
+            ),
+            drum.c_str()
+        );
+    }
+
+    return menu;
+}
+
+// ============================================================
 // SHOW INSTRUMENT SELECTOR
 // ============================================================
 
@@ -2039,9 +2017,7 @@ void ShowInstrumentSelector()
 
     POINT point;
 
-    GetCursorPos(
-        &point
-    );
+    GetCursorPos(&point);
 
     HMENU menu =
         BuildInstrumentMenu();
@@ -2058,9 +2034,7 @@ void ShowInstrumentSelector()
         nullptr
     );
 
-    DestroyMenu(
-        menu
-    );
+    DestroyMenu(menu);
 }
 
 // ============================================================
@@ -2074,9 +2048,7 @@ void ShowChordSelector()
 
     POINT point;
 
-    GetCursorPos(
-        &point
-    );
+    GetCursorPos(&point);
 
     HMENU menu =
         BuildChordMenu();
@@ -2093,9 +2065,38 @@ void ShowChordSelector()
         nullptr
     );
 
-    DestroyMenu(
-        menu
+    DestroyMenu(menu);
+}
+
+// ============================================================
+// SHOW DRUM SELECTOR
+// ============================================================
+
+void ShowDrumSelector()
+{
+    if (!mainWindow)
+        return;
+
+    POINT point;
+
+    GetCursorPos(&point);
+
+    HMENU menu =
+        BuildDrumMenu();
+
+    TrackPopupMenu(
+        menu,
+        TPM_LEFTALIGN |
+        TPM_TOPALIGN |
+        TPM_RIGHTBUTTON,
+        point.x,
+        point.y,
+        0,
+        mainWindow,
+        nullptr
     );
+
+    DestroyMenu(menu);
 }
 
 // ============================================================
@@ -2126,17 +2127,16 @@ int CalculateContentHeight(
         BOTTOM_MARGIN;
 
     if (tracksBottom > rect.bottom)
-    return tracksBottom;
+        return tracksBottom;
 
-return rect.bottom;
+    return rect.bottom;
 }
 
 // ============================================================
 // UPDATE SCROLL BAR
 // ============================================================
 
-void UpdateScrollBar(
-    HWND window)
+void UpdateScrollBar(HWND window)
 {
     RECT rect;
 
@@ -2202,7 +2202,6 @@ void UpdateScrollBar(
 // ============================================================
 
 std::vector<HWND> trackPlayButtons;
-
 std::vector<HWND> trackLoadButtons;
 
 // ============================================================
@@ -2311,13 +2310,8 @@ void ResizeTrackButtons()
                 nullptr
             );
 
-        trackPlayButtons.push_back(
-            play
-        );
-
-        trackLoadButtons.push_back(
-            load
-        );
+        trackPlayButtons.push_back(play);
+        trackLoadButtons.push_back(load);
 
         y +=
             TRACK_BUTTON_HEIGHT +
@@ -2393,6 +2387,16 @@ void ResizeControls()
         LEFT_MARGIN + 395,
         12 - scrollY,
         90,
+        30,
+        TRUE
+    );
+
+    // NEW DRUMS BUTTON
+    MoveWindow(
+        drumsButton,
+        LEFT_MARGIN + 490,
+        12 - scrollY,
+        80,
         30,
         TRUE
     );
@@ -2513,13 +2517,9 @@ void SaveTrack()
         return;
     }
 
-    savedTracks.push_back(
-        text
-    );
+    savedTracks.push_back(text);
 
-    SetEditorText(
-        ""
-    );
+    SetEditorText("");
 
     ResizeControls();
 
@@ -2534,8 +2534,7 @@ void SaveTrack()
 // LOAD TRACK
 // ============================================================
 
-void LoadTrack(
-    int index)
+void LoadTrack(int index)
 {
     if (
         index < 0 ||
@@ -2560,8 +2559,7 @@ void LoadTrack(
 // PLAY SAVED TRACK
 // ============================================================
 
-void PlaySavedTrack(
-    int index)
+void PlaySavedTrack(int index)
 {
     if (
         index < 0 ||
@@ -2779,6 +2777,16 @@ LRESULT CALLBACK WindowProcedure(
             }
 
             // ------------------------------------------------
+            // DRUMS
+            // ------------------------------------------------
+
+            if (id == ID_DRUMS)
+            {
+                ShowDrumSelector();
+                return 0;
+            }
+
+            // ------------------------------------------------
             // TEMPO MINUS
             // ------------------------------------------------
 
@@ -2787,8 +2795,7 @@ LRESULT CALLBACK WindowProcedure(
                 double tempo =
                     currentTempo.load();
 
-                tempo -=
-                    TEMPO_STEP;
+                tempo -= TEMPO_STEP;
 
                 if (tempo < MIN_TEMPO)
                     tempo = MIN_TEMPO;
@@ -2810,8 +2817,7 @@ LRESULT CALLBACK WindowProcedure(
                 double tempo =
                     currentTempo.load();
 
-                tempo +=
-                    TEMPO_STEP;
+                tempo += TEMPO_STEP;
 
                 if (tempo > MAX_TEMPO)
                     tempo = MAX_TEMPO;
@@ -2833,8 +2839,7 @@ LRESULT CALLBACK WindowProcedure(
                 int pitch =
                     currentPitch.load();
 
-                pitch -=
-                    PITCH_STEP;
+                pitch -= PITCH_STEP;
 
                 if (pitch < MIN_PITCH)
                     pitch = MIN_PITCH;
@@ -2856,8 +2861,7 @@ LRESULT CALLBACK WindowProcedure(
                 int pitch =
                     currentPitch.load();
 
-                pitch +=
-                    PITCH_STEP;
+                pitch += PITCH_STEP;
 
                 if (pitch > MAX_PITCH)
                     pitch = MAX_PITCH;
@@ -2918,6 +2922,25 @@ LRESULT CALLBACK WindowProcedure(
             }
 
             // ------------------------------------------------
+            // DRUM SELECTOR
+            // ------------------------------------------------
+
+            auto drumFound =
+                drumCommands.find(id);
+
+            if (
+                drumFound !=
+                drumCommands.end())
+            {
+                InsertEditorText(
+                    drumFound->second +
+                    "\r\n"
+                );
+
+                return 0;
+            }
+
+            // ------------------------------------------------
             // PLAY SAVED TRACK
             // ------------------------------------------------
 
@@ -2933,9 +2956,7 @@ LRESULT CALLBACK WindowProcedure(
                         ID_PLAY_TRACK_BASE
                     );
 
-                PlaySavedTrack(
-                    index
-                );
+                PlaySavedTrack(index);
 
                 return 0;
             }
@@ -2956,9 +2977,7 @@ LRESULT CALLBACK WindowProcedure(
                         ID_LOAD_TRACK_BASE
                     );
 
-                LoadTrack(
-                    index
-                );
+                LoadTrack(index);
 
                 return 0;
             }
@@ -3041,8 +3060,7 @@ LRESULT CALLBACK WindowProcedure(
             int newPos =
                 si.nPos;
 
-            switch (
-                LOWORD(wParam))
+            switch (LOWORD(wParam))
             {
                 case SB_LINEUP:
                     newPos -= 40;
@@ -3258,9 +3276,7 @@ LRESULT CALLBACK WindowProcedure(
                 oldPen
             );
 
-            DeleteObject(
-                pen
-            );
+            DeleteObject(pen);
 
             // ------------------------------------------------
             // TRACK AREA
@@ -3328,9 +3344,7 @@ LRESULT CALLBACK WindowProcedure(
                 editBrush = nullptr;
             }
 
-            PostQuitMessage(
-                0
-            );
+            PostQuitMessage(0);
 
             return 0;
         }
@@ -3486,6 +3500,14 @@ int WINAPI WinMain(
         CreateButton(
             "CHORDS",
             ID_CHORDS,
+            instance
+        );
+
+    // NEW DRUMS BUTTON
+    drumsButton =
+        CreateButton(
+            "DRUMS",
+            ID_DRUMS,
             instance
         );
 
@@ -3649,10 +3671,6 @@ int WINAPI WinMain(
         DispatchMessageA(
             &message
         );
-
-        // ----------------------------------------------------
-        // Put PLAY back after playback ends.
-        // ----------------------------------------------------
 
         if (
             !playing &&
