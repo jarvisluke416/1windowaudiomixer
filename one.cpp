@@ -52,9 +52,9 @@ const COLORREF EDIT_TEXT = RGB(255, 255, 255);
 HWND mainWindow = nullptr;
 
 HWND playButton = nullptr;
+HWND playAllButton = nullptr;
 HWND loopButton = nullptr;
 HWND boostButton = nullptr;
-HWND playAllTracksButton = nullptr;
 
 HWND instrumentsButton = nullptr;
 HWND chordsButton = nullptr;
@@ -80,6 +80,7 @@ HBRUSH editBrush = nullptr;
 std::atomic_bool playing(false);
 std::atomic_bool looping(false);
 std::atomic_bool stopRequested(false);
+std::atomic_bool playingAll(false);
 
 std::atomic<double> currentTempo(120.0);
 std::atomic<int> currentPitch(0);
@@ -113,6 +114,7 @@ std::vector<std::string> savedTracks;
 // ============================================================
 
 const UINT ID_PLAY = 1000;
+const UINT ID_PLAY_ALL = 1011;
 const UINT ID_LOOP = 1001;
 const UINT ID_BOOST = 1002;
 
@@ -127,7 +129,6 @@ const UINT ID_PITCH_MINUS = 1008;
 const UINT ID_PITCH_PLUS = 1009;
 
 const UINT ID_SAVE_TRACK = 1010;
-const UINT ID_PLAY_ALL_TRACKS = 1011;
 
 const UINT ID_LOAD_TRACK_BASE = 3000;
 const UINT ID_PLAY_TRACK_BASE = 4000;
@@ -471,17 +472,13 @@ double kick(double t)
 
     double body =
         std::sin(
-            2.0 * PI *
-            frequency *
-            t
+            2.0 * PI * frequency * t
         ) *
         std::exp(-6.0 * t);
 
     double beater =
         std::sin(
-            2.0 * PI *
-            95.0 *
-            t
+            2.0 * PI * 95.0 * t
         ) *
         std::exp(-55.0 * t);
 
@@ -506,32 +503,26 @@ double snare(double t)
 
     double body =
         std::sin(
-            2.0 * PI *
-            190.0 *
-            t
+            2.0 * PI * 190.0 * t
         ) *
         std::exp(-19.0 * t);
 
     double ring =
         std::sin(
-            2.0 * PI *
-            330.0 *
-            t
+            2.0 * PI * 330.0 * t
         ) *
         std::exp(-27.0 * t);
 
     double attack =
         std::sin(
-            2.0 * PI *
-            1700.0 *
-            t
+            2.0 * PI * 1700.0 * t
         ) *
         std::exp(-105.0 * t);
 
     return
-        wire * 0.68 +
-        body * 0.48 +
-        ring * 0.16 +
+        wire   * 0.68 +
+        body   * 0.48 +
+        ring   * 0.16 +
         attack * 0.14;
 }
 
@@ -594,24 +585,17 @@ double tom(
 
     double body =
         std::sin(
-            2.0 * PI *
-            pitch *
-            t
+            2.0 * PI * pitch * t
         );
 
     double harmonic =
         std::sin(
-            2.0 * PI *
-            pitch *
-            1.98 *
-            t
+            2.0 * PI * pitch * 1.98 * t
         ) * 0.16;
 
     double attack =
         std::sin(
-            2.0 * PI *
-            700.0 *
-            t
+            2.0 * PI * 700.0 * t
         ) *
         std::exp(-45.0 * t);
 
@@ -663,16 +647,12 @@ double ride(double t)
 
     double bell =
         std::sin(
-            2.0 * PI *
-            2800.0 *
-            t
+            2.0 * PI * 2800.0 * t
         ) * 0.22;
 
     double metallicTone =
         std::sin(
-            2.0 * PI *
-            4700.0 *
-            t
+            2.0 * PI * 4700.0 * t
         ) * 0.15;
 
     double envelope =
@@ -695,17 +675,13 @@ double rimshot(double t)
 
     double attack =
         std::sin(
-            2.0 * PI *
-            1250.0 *
-            t
+            2.0 * PI * 1250.0 * t
         ) *
         std::exp(-45.0 * t);
 
     double wood =
         std::sin(
-            2.0 * PI *
-            420.0 *
-            t
+            2.0 * PI * 420.0 * t
         ) *
         std::exp(-35.0 * t);
 
@@ -715,8 +691,8 @@ double rimshot(double t)
 
     return
         attack * 0.65 +
-        wood * 0.30 +
-        click * 0.20;
+        wood   * 0.30 +
+        click  * 0.20;
 }
 
 double makeDrum(
@@ -897,7 +873,7 @@ bool LoadSongText(
 }
 
 // ============================================================
-// EDITOR TEXT
+// GET EDITOR TEXT
 // ============================================================
 
 std::string GetEditorText()
@@ -930,6 +906,10 @@ std::string GetEditorText()
     return text;
 }
 
+// ============================================================
+// SET EDITOR TEXT
+// ============================================================
+
 void SetEditorText(
     const std::string& text)
 {
@@ -941,6 +921,10 @@ void SetEditorText(
         text.c_str()
     );
 }
+
+// ============================================================
+// INSERT TEXT AT CARET
+// ============================================================
 
 void InsertEditorText(
     const std::string& text)
@@ -959,7 +943,7 @@ void InsertEditorText(
 }
 
 // ============================================================
-// VOLUME
+// VOLUME MULTIPLIER
 // ============================================================
 
 double GetVolumeMultiplier(int level)
@@ -1267,7 +1251,7 @@ bool GenerateAudio(
 }
 
 // ============================================================
-// PLAY SONG TEXT
+// PLAY ONE SONG
 // ============================================================
 
 void PlaySongText(
@@ -1280,6 +1264,7 @@ void PlaySongText(
         return;
 
     playing = true;
+    playingAll = false;
     stopRequested = false;
 
     std::vector<NoteEvent> notes;
@@ -1310,7 +1295,10 @@ void PlaySongText(
         WAVE_FORMAT_PCM;
 
     format.nChannels = 1;
-    format.nSamplesPerSec = SAMPLE_RATE;
+
+    format.nSamplesPerSec =
+        SAMPLE_RATE;
+
     format.wBitsPerSample = 16;
 
     format.nBlockAlign =
@@ -1341,208 +1329,297 @@ void PlaySongText(
         return;
     }
 
-    std::vector<short> audioSamples[
-        AUDIO_BUFFER_COUNT
-    ];
+    std::vector<short> samples;
 
-    WAVEHDR headers[
-        AUDIO_BUFFER_COUNT
-    ] = {};
+    double tempo =
+        currentTempo.load();
 
-    bool prepared[
-        AUDIO_BUFFER_COUNT
-    ] = {};
+    int pitch =
+        currentPitch.load();
 
-    bool queued[
-        AUDIO_BUFFER_COUNT
-    ] = {};
+    double multiplier =
+        GetVolumeMultiplier(
+            volumeBoost.load()
+        );
 
-    auto generateBuffer =
-        [&](int index)
-        {
-            double tempo =
-                currentTempo.load();
-
-            int pitch =
-                currentPitch.load();
-
-            double multiplier =
-                GetVolumeMultiplier(
-                    volumeBoost.load()
-                );
-
-            return GenerateAudio(
-                songText,
-                tempo,
-                pitch,
-                multiplier,
-                audioSamples[index]
-            );
-        };
-
-    auto prepareAndWrite =
-        [&](int index) -> bool
-        {
-            headers[index] = {};
-
-            headers[index].lpData =
-                reinterpret_cast<LPSTR>(
-                    audioSamples[index].data()
-                );
-
-            headers[index].dwBufferLength =
-                static_cast<DWORD>(
-                    audioSamples[index].size() *
-                    sizeof(short)
-                );
-
-            if (
-                waveOutPrepareHeader(
-                    audioDevice,
-                    &headers[index],
-                    sizeof(WAVEHDR)
-                ) != MMSYSERR_NOERROR)
-            {
-                return false;
-            }
-
-            prepared[index] = true;
-
-            if (
-                waveOutWrite(
-                    audioDevice,
-                    &headers[index],
-                    sizeof(WAVEHDR)
-                ) != MMSYSERR_NOERROR)
-            {
-                waveOutUnprepareHeader(
-                    audioDevice,
-                    &headers[index],
-                    sizeof(WAVEHDR)
-                );
-
-                prepared[index] = false;
-
-                return false;
-            }
-
-            queued[index] = true;
-
-            return true;
-        };
-
-    if (!generateBuffer(0))
+    if (!GenerateAudio(
+        songText,
+        tempo,
+        pitch,
+        multiplier,
+        samples))
     {
         waveOutClose(audioDevice);
         playing = false;
         return;
     }
 
-    if (!prepareAndWrite(0))
+    WAVEHDR header = {};
+
+    header.lpData =
+        reinterpret_cast<LPSTR>(
+            samples.data()
+        );
+
+    header.dwBufferLength =
+        static_cast<DWORD>(
+            samples.size() *
+            sizeof(short)
+        );
+
+    if (
+        waveOutPrepareHeader(
+            audioDevice,
+            &header,
+            sizeof(WAVEHDR)
+        ) != MMSYSERR_NOERROR)
     {
         waveOutClose(audioDevice);
         playing = false;
         return;
     }
 
-    if (looping)
+    if (
+        waveOutWrite(
+            audioDevice,
+            &header,
+            sizeof(WAVEHDR)
+        ) != MMSYSERR_NOERROR)
     {
-        if (generateBuffer(1))
-        {
-            prepareAndWrite(1);
-        }
+        waveOutUnprepareHeader(
+            audioDevice,
+            &header,
+            sizeof(WAVEHDR)
+        );
+
+        waveOutClose(audioDevice);
+        playing = false;
+        return;
     }
 
     while (!stopRequested)
     {
-        bool didSomething = false;
+        if (header.dwFlags & WHDR_DONE)
+            break;
 
-        for (int i = 0;
-             i < AUDIO_BUFFER_COUNT;
-             ++i)
-        {
-            if (!queued[i])
-                continue;
-
-            if (!(headers[i].dwFlags & WHDR_DONE))
-                continue;
-
-            didSomething = true;
-
-            waveOutUnprepareHeader(
-                audioDevice,
-                &headers[i],
-                sizeof(WAVEHDR)
-            );
-
-            prepared[i] = false;
-            queued[i] = false;
-
-            if (!looping)
-                continue;
-
-            if (stopRequested)
-                continue;
-
-            if (!generateBuffer(i))
-            {
-                stopRequested = true;
-                continue;
-            }
-
-            if (!prepareAndWrite(i))
-            {
-                stopRequested = true;
-                continue;
-            }
-        }
-
-        if (!looping)
-        {
-            bool anythingQueued = false;
-
-            for (int i = 0;
-                 i < AUDIO_BUFFER_COUNT;
-                 ++i)
-            {
-                if (queued[i])
-                {
-                    anythingQueued = true;
-                    break;
-                }
-            }
-
-            if (!anythingQueued)
-                break;
-        }
-
-        if (!didSomething)
-            Sleep(1);
+        Sleep(1);
     }
 
     waveOutReset(audioDevice);
 
-    for (int i = 0;
-         i < AUDIO_BUFFER_COUNT;
-         ++i)
-    {
-        if (prepared[i])
-        {
-            waveOutUnprepareHeader(
-                audioDevice,
-                &headers[i],
-                sizeof(WAVEHDR)
-            );
-
-            prepared[i] = false;
-        }
-
-        queued[i] = false;
-    }
+    waveOutUnprepareHeader(
+        audioDevice,
+        &header,
+        sizeof(WAVEHDR)
+    );
 
     waveOutClose(audioDevice);
 
     playing = false;
+}
+
+// ============================================================
+// PLAY ALL SAVED TRACKS GAPLESS
+// ============================================================
+
+void PlayAllSavedTracks()
+{
+    if (playing)
+        return;
+
+    if (savedTracks.empty())
+        return;
+
+    playing = true;
+    playingAll = true;
+    stopRequested = false;
+
+    // --------------------------------------------------------
+    // Generate every track first.
+    // --------------------------------------------------------
+
+    std::vector<short> combinedSamples;
+
+    double tempo =
+        currentTempo.load();
+
+    int pitch =
+        currentPitch.load();
+
+    double multiplier =
+        GetVolumeMultiplier(
+            volumeBoost.load()
+        );
+
+    for (
+        size_t i = 0;
+        i < savedTracks.size();
+        ++i)
+    {
+        if (stopRequested)
+            break;
+
+        std::vector<short> trackSamples;
+
+        if (!GenerateAudio(
+            savedTracks[i],
+            tempo,
+            pitch,
+            multiplier,
+            trackSamples))
+        {
+            continue;
+        }
+
+        // ----------------------------------------------------
+        // IMPORTANT:
+        //
+        // Track samples are appended directly.
+        // There is NO silence inserted here.
+        // ----------------------------------------------------
+
+        combinedSamples.insert(
+            combinedSamples.end(),
+            trackSamples.begin(),
+            trackSamples.end()
+        );
+    }
+
+    if (
+        combinedSamples.empty() ||
+        stopRequested)
+    {
+        playing = false;
+        playingAll = false;
+        return;
+    }
+
+    // --------------------------------------------------------
+    // OPEN ONE AUDIO DEVICE FOR THE ENTIRE SONG
+    // --------------------------------------------------------
+
+    WAVEFORMATEX format = {};
+
+    format.wFormatTag =
+        WAVE_FORMAT_PCM;
+
+    format.nChannels = 1;
+
+    format.nSamplesPerSec =
+        SAMPLE_RATE;
+
+    format.wBitsPerSample = 16;
+
+    format.nBlockAlign =
+        format.nChannels *
+        format.wBitsPerSample / 8;
+
+    format.nAvgBytesPerSec =
+        format.nSamplesPerSec *
+        format.nBlockAlign;
+
+    HWAVEOUT audioDevice = nullptr;
+
+    MMRESULT result =
+        waveOutOpen(
+            &audioDevice,
+            WAVE_MAPPER,
+            &format,
+            0,
+            0,
+            CALLBACK_NULL
+        );
+
+    if (
+        result !=
+        MMSYSERR_NOERROR)
+    {
+        playing = false;
+        playingAll = false;
+        return;
+    }
+
+    // --------------------------------------------------------
+    // ONE CONTINUOUS BUFFER
+    // --------------------------------------------------------
+
+    WAVEHDR header = {};
+
+    header.lpData =
+        reinterpret_cast<LPSTR>(
+            combinedSamples.data()
+        );
+
+    header.dwBufferLength =
+        static_cast<DWORD>(
+            combinedSamples.size() *
+            sizeof(short)
+        );
+
+    if (
+        waveOutPrepareHeader(
+            audioDevice,
+            &header,
+            sizeof(WAVEHDR)
+        ) != MMSYSERR_NOERROR)
+    {
+        waveOutClose(audioDevice);
+
+        playing = false;
+        playingAll = false;
+
+        return;
+    }
+
+    if (
+        waveOutWrite(
+            audioDevice,
+            &header,
+            sizeof(WAVEHDR)
+        ) != MMSYSERR_NOERROR)
+    {
+        waveOutUnprepareHeader(
+            audioDevice,
+            &header,
+            sizeof(WAVEHDR)
+        );
+
+        waveOutClose(audioDevice);
+
+        playing = false;
+        playingAll = false;
+
+        return;
+    }
+
+    // --------------------------------------------------------
+    // WAIT UNTIL THE ENTIRE COMBINED SONG FINISHES
+    // --------------------------------------------------------
+
+    while (!stopRequested)
+    {
+        if (header.dwFlags & WHDR_DONE)
+            break;
+
+        Sleep(1);
+    }
+
+    // --------------------------------------------------------
+    // STOP
+    // --------------------------------------------------------
+
+    waveOutReset(audioDevice);
+
+    waveOutUnprepareHeader(
+        audioDevice,
+        &header,
+        sizeof(WAVEHDR)
+    );
+
+    waveOutClose(audioDevice);
+
+    playing = false;
+    playingAll = false;
 }
 
 // ============================================================
@@ -1562,6 +1639,35 @@ void PlayEditor()
     std::thread(
         PlaySongText,
         text
+    ).detach();
+}
+
+// ============================================================
+// PLAY ALL
+// ============================================================
+
+void StartPlayAll()
+{
+    if (savedTracks.empty())
+    {
+        MessageBoxA(
+            mainWindow,
+            "There are no saved tracks.",
+            "PLAY ALL",
+            MB_OK | MB_ICONINFORMATION
+        );
+
+        return;
+    }
+
+    if (playing)
+    {
+        stopRequested = true;
+        return;
+    }
+
+    std::thread(
+        PlayAllSavedTracks
     ).detach();
 }
 
@@ -1651,7 +1757,7 @@ void UpdateBoostDisplay()
 }
 
 // ============================================================
-// CHORDS
+// CHORD ROOTS
 // ============================================================
 
 std::vector<std::string> GetChordRoots()
@@ -1663,6 +1769,10 @@ std::vector<std::string> GetChordRoots()
     };
 }
 
+// ============================================================
+// CHORD TYPES
+// ============================================================
+
 std::vector<std::string> GetChordTypes()
 {
     return
@@ -1673,6 +1783,10 @@ std::vector<std::string> GetChordTypes()
         "MAJOR 7"
     };
 }
+
+// ============================================================
+// NOTE FROM SEMITONE
+// ============================================================
 
 std::string NoteFromSemitone(
     int semitone)
@@ -1701,6 +1815,10 @@ std::string NoteFromSemitone(
         std::to_string(octave);
 }
 
+// ============================================================
+// CHORD NOTES
+// ============================================================
+
 std::vector<std::string> GetChordNotes(
     const std::string& root,
     const std::string& type)
@@ -1724,13 +1842,21 @@ std::vector<std::string> GetChordNotes(
     std::vector<int> intervals;
 
     if (type == "MAJOR")
+    {
         intervals = {0,4,7};
+    }
     else if (type == "MINOR")
+    {
         intervals = {0,3,7};
+    }
     else if (type == "MINOR 7")
+    {
         intervals = {0,3,7,10};
+    }
     else if (type == "MAJOR 7")
+    {
         intervals = {0,4,7,11};
+    }
 
     std::vector<std::string> result;
 
@@ -1771,6 +1897,10 @@ std::vector<std::string> GetDrums()
     };
 }
 
+// ============================================================
+// DRUM TYPE TO COMMAND
+// ============================================================
+
 std::string DrumCommandName(
     const std::string& displayName)
 {
@@ -1790,7 +1920,7 @@ std::string DrumCommandName(
 }
 
 // ============================================================
-// INSTRUMENT MENU
+// BUILD INSTRUMENT MENU
 // ============================================================
 
 HMENU BuildInstrumentMenu()
@@ -1850,7 +1980,7 @@ HMENU BuildInstrumentMenu()
 }
 
 // ============================================================
-// CHORD MENU
+// BUILD CHORD MENU
 // ============================================================
 
 HMENU BuildChordMenu()
@@ -1946,7 +2076,7 @@ HMENU BuildChordMenu()
 }
 
 // ============================================================
-// DRUM MENU
+// BUILD DRUM MENU
 // ============================================================
 
 HMENU BuildDrumMenu()
@@ -2037,7 +2167,7 @@ HMENU BuildDrumMenu()
 }
 
 // ============================================================
-// SHOW MENUS
+// SHOW INSTRUMENT SELECTOR
 // ============================================================
 
 void ShowInstrumentSelector()
@@ -2046,6 +2176,7 @@ void ShowInstrumentSelector()
         return;
 
     POINT point;
+
     GetCursorPos(&point);
 
     HMENU menu =
@@ -2066,12 +2197,17 @@ void ShowInstrumentSelector()
     DestroyMenu(menu);
 }
 
+// ============================================================
+// SHOW CHORD SELECTOR
+// ============================================================
+
 void ShowChordSelector()
 {
     if (!mainWindow)
         return;
 
     POINT point;
+
     GetCursorPos(&point);
 
     HMENU menu =
@@ -2092,12 +2228,17 @@ void ShowChordSelector()
     DestroyMenu(menu);
 }
 
+// ============================================================
+// SHOW DRUM SELECTOR
+// ============================================================
+
 void ShowDrumSelector()
 {
     if (!mainWindow)
         return;
 
     POINT point;
+
     GetCursorPos(&point);
 
     HMENU menu =
@@ -2119,452 +2260,397 @@ void ShowDrumSelector()
 }
 
 // ============================================================
-// TRACK BUTTONS
+// CUSTOM DRAWING HELPERS
 // ============================================================
 
-std::vector<HWND> trackPlayButtons;
-std::vector<HWND> trackLoadButtons;
-std::vector<HWND> trackDeleteButtons;
-
-void DestroyTrackButtons()
+void DrawButton(
+    HDC dc,
+    HWND hwnd,
+    const char* text)
 {
-    for (HWND button :
-         trackPlayButtons)
-    {
-        if (button)
-            DestroyWindow(button);
-    }
-
-    for (HWND button :
-         trackLoadButtons)
-    {
-        if (button)
-            DestroyWindow(button);
-    }
-
-    for (HWND button :
-         trackDeleteButtons)
-    {
-        if (button)
-            DestroyWindow(button);
-    }
-
-    trackPlayButtons.clear();
-    trackLoadButtons.clear();
-    trackDeleteButtons.clear();
-}
-
-// ============================================================
-// CREATE SAVED TRACK BUTTONS
-// ============================================================
-
-void ResizeTrackButtons()
-{
-    DestroyTrackButtons();
-
-    if (!mainWindow)
-        return;
-
     RECT rect;
 
     GetClientRect(
-        mainWindow,
+        hwnd,
         &rect
     );
 
-    int width =
-        rect.right -
-        LEFT_MARGIN * 2;
+    // --------------------------------------------------------
+    // Background
+    // --------------------------------------------------------
 
-    if (width < 400)
-        width = 400;
-
-    int y =
-        TRACK_TOP -
-        scrollY;
-
-    const int deleteWidth = 90;
-    const int loadWidth = 80;
-    const int gap = 5;
-
-    int playWidth =
-        width -
-        deleteWidth -
-        loadWidth -
-        gap * 2;
-
-    for (int i = 0;
-         i < static_cast<int>(
-                savedTracks.size());
-         ++i)
-    {
-        std::string trackName =
-            "TRACK " +
-            std::to_string(i + 1);
-
-        // PLAY TRACK
-        HWND play =
-            CreateWindowA(
-                "BUTTON",
-                trackName.c_str(),
-                WS_VISIBLE |
-                WS_CHILD |
-                BS_PUSHBUTTON,
-                LEFT_MARGIN,
-                y,
-                playWidth,
-                TRACK_BUTTON_HEIGHT,
-                mainWindow,
-                reinterpret_cast<HMENU>(
-                    static_cast<INT_PTR>(
-                        ID_PLAY_TRACK_BASE +
-                        i
-                    )
-                ),
-                GetModuleHandleA(nullptr),
-                nullptr
-            );
-
-        // LOAD
-        HWND load =
-            CreateWindowA(
-                "BUTTON",
-                "LOAD",
-                WS_VISIBLE |
-                WS_CHILD |
-                BS_PUSHBUTTON,
-                LEFT_MARGIN +
-                playWidth +
-                gap,
-                y,
-                loadWidth,
-                TRACK_BUTTON_HEIGHT,
-                mainWindow,
-                reinterpret_cast<HMENU>(
-                    static_cast<INT_PTR>(
-                        ID_LOAD_TRACK_BASE +
-                        i
-                    )
-                ),
-                GetModuleHandleA(nullptr),
-                nullptr
-            );
-
-        // DELETE
-        HWND deleteButton =
-            CreateWindowA(
-                "BUTTON",
-                "DELETE",
-                WS_VISIBLE |
-                WS_CHILD |
-                BS_PUSHBUTTON,
-                LEFT_MARGIN +
-                playWidth +
-                gap +
-                loadWidth +
-                gap,
-                y,
-                deleteWidth,
-                TRACK_BUTTON_HEIGHT,
-                mainWindow,
-                reinterpret_cast<HMENU>(
-                    static_cast<INT_PTR>(
-                        ID_DELETE_TRACK_BASE +
-                        i
-                    )
-                ),
-                GetModuleHandleA(nullptr),
-                nullptr
-            );
-
-        trackPlayButtons.push_back(play);
-        trackLoadButtons.push_back(load);
-        trackDeleteButtons.push_back(deleteButton);
-
-        y +=
-            TRACK_BUTTON_HEIGHT +
-            TRACK_GAP;
-    }
-}
-
-// ============================================================
-// CONTENT HEIGHT
-// ============================================================
-
-int CalculateContentHeight(
-    RECT rect)
-{
-    int trackCount =
-        static_cast<int>(
-            savedTracks.size()
+    HBRUSH brush =
+        CreateSolidBrush(
+            COLUMN
         );
 
-    int trackRows =
-        std::max(
+    FillRect(
+        dc,
+        &rect,
+        brush
+    );
+
+    DeleteObject(
+        brush
+    );
+
+    // --------------------------------------------------------
+    // Border
+    // --------------------------------------------------------
+
+    HPEN pen =
+        CreatePen(
+            PS_SOLID,
             1,
-            trackCount
+            COLUMN_BORDER
         );
 
-    int tracksBottom =
-        TRACK_TOP +
-        trackRows *
-        (
-            TRACK_BUTTON_HEIGHT +
-            TRACK_GAP
-        ) +
-        BOTTOM_MARGIN;
+    HPEN oldPen =
+        static_cast<HPEN>(
+            SelectObject(
+                dc,
+                pen
+            )
+        );
 
-    if (tracksBottom > rect.bottom)
-        return tracksBottom;
+    HBRUSH oldBrush =
+        static_cast<HBRUSH>(
+            SelectObject(
+                dc,
+                GetStockObject(
+                    NULL_BRUSH
+                )
+            )
+        );
 
-    return rect.bottom;
+    Rectangle(
+        dc,
+        rect.left,
+        rect.top,
+        rect.right,
+        rect.bottom
+    );
+
+    // Restore the original brush and pen.
+
+    SelectObject(
+        dc,
+        oldBrush
+    );
+
+    SelectObject(
+        dc,
+        oldPen
+    );
+
+    DeleteObject(
+        pen
+    );
+
+    // --------------------------------------------------------
+    // Text
+    // --------------------------------------------------------
+
+    SetBkMode(
+        dc,
+        TRANSPARENT
+    );
+
+    SetTextColor(
+        dc,
+        BUTTON_TEXT
+    );
+
+    HFONT font =
+        static_cast<HFONT>(
+            GetStockObject(
+                DEFAULT_GUI_FONT
+            )
+        );
+
+    HFONT oldFont =
+        static_cast<HFONT>(
+            SelectObject(
+                dc,
+                font
+            )
+        );
+
+    DrawTextA(
+        dc,
+        text,
+        -1,
+        &rect,
+        DT_CENTER |
+        DT_VCENTER |
+        DT_SINGLELINE
+    );
+
+    SelectObject(
+        dc,
+        oldFont
+    );
 }
 
 // ============================================================
-// SCROLL BAR
+// BUTTON WINDOW PROCEDURE
 // ============================================================
 
-void UpdateScrollBar(HWND window)
+LRESULT CALLBACK ButtonProc(
+    HWND hwnd,
+    UINT message,
+    WPARAM wParam,
+    LPARAM lParam)
 {
-    RECT rect;
+    switch (message)
+    {
+        case WM_PAINT:
+        {
+            PAINTSTRUCT ps;
 
-    GetClientRect(
-        window,
-        &rect
-    );
+            HDC dc =
+                BeginPaint(
+                    hwnd,
+                    &ps
+                );
 
-    contentHeight =
-        CalculateContentHeight(
-            rect
-        );
+            char text[256];
 
-    int visibleHeight =
-        rect.bottom;
+            GetWindowTextA(
+                hwnd,
+                text,
+                sizeof(text)
+            );
 
-    if (visibleHeight < 1)
-        visibleHeight = 1;
+            DrawButton(
+                dc,
+                hwnd,
+                text
+            );
 
-    int maximum =
-        contentHeight -
-        visibleHeight;
+            EndPaint(
+                hwnd,
+                &ps
+            );
 
-    if (maximum < 0)
-        maximum = 0;
+            return 0;
+        }
 
-    if (scrollY > maximum)
-        scrollY = maximum;
+        case WM_ERASEBKGND:
+            return 1;
+    }
 
-    SCROLLINFO si = {};
-
-    si.cbSize =
-        sizeof(SCROLLINFO);
-
-    si.fMask =
-        SIF_RANGE |
-        SIF_PAGE |
-        SIF_POS;
-
-    si.nMin = 0;
-    si.nMax = contentHeight;
-
-    si.nPage =
-        static_cast<UINT>(
-            visibleHeight
-        );
-
-    si.nPos =
-        scrollY;
-
-    SetScrollInfo(
-        window,
-        SB_VERT,
-        &si,
-        TRUE
+    return DefWindowProcA(
+        hwnd,
+        message,
+        wParam,
+        lParam
     );
 }
 
 // ============================================================
-// RESIZE ALL CONTROLS
+// CREATE CUSTOM BUTTON
 // ============================================================
 
-void ResizeControls()
+HWND CreateCustomButton(
+    const char* text,
+    int x,
+    int y,
+    int width,
+    int height,
+    UINT id)
 {
-    if (!mainWindow)
+    return CreateWindowExA(
+        0,
+        "BUTTON",
+        text,
+        WS_CHILD |
+        WS_VISIBLE |
+        BS_OWNERDRAW,
+        x,
+        y,
+        width,
+        height,
+        mainWindow,
+        reinterpret_cast<HMENU>(
+            static_cast<UINT_PTR>(id)
+        ),
+        GetModuleHandleA(nullptr),
+        nullptr
+    );
+}
+
+// ============================================================
+// OWNER DRAW BUTTON
+// ============================================================
+
+void DrawOwnerButton(
+    LPDRAWITEMSTRUCT dis)
+{
+    if (!dis)
         return;
 
-    RECT rect;
+    HDC dc =
+        dis->hDC;
 
-    GetClientRect(
-        mainWindow,
-        &rect
+    RECT rect =
+        dis->rcItem;
+
+    bool pressed =
+        (dis->itemState & ODS_SELECTED) != 0;
+
+    COLORREF background =
+        pressed
+            ? RGB(45, 45, 55)
+            : COLUMN;
+
+    HBRUSH backgroundBrush =
+        CreateSolidBrush(
+            background
+        );
+
+    FillRect(
+        dc,
+        &rect,
+        backgroundBrush
     );
 
-    int width =
-        rect.right -
-        LEFT_MARGIN * 2;
-
-    if (width < 300)
-        width = 300;
-
-    // TOP ROW
-
-    MoveWindow(
-        playButton,
-        LEFT_MARGIN,
-        12 - scrollY,
-        80,
-        30,
-        TRUE
+    DeleteObject(
+        backgroundBrush
     );
 
-    MoveWindow(
-        loopButton,
-        LEFT_MARGIN + 85,
-        12 - scrollY,
-        90,
-        30,
-        TRUE
+    // --------------------------------------------------------
+    // Border
+    // --------------------------------------------------------
+
+    COLORREF borderColor =
+        (dis->itemState & ODS_FOCUS)
+            ? RGB(0, 255, 0)
+            : COLUMN_BORDER;
+
+    HPEN pen =
+        CreatePen(
+            PS_SOLID,
+            1,
+            borderColor
+        );
+
+    HPEN oldPen =
+        static_cast<HPEN>(
+            SelectObject(
+                dc,
+                pen
+            )
+        );
+
+    // IMPORTANT:
+    // NULL_BRUSH is selected separately.
+    // Do NOT put the semicolon inside static_cast.
+
+    HBRUSH nullBrush =
+        static_cast<HBRUSH>(
+            GetStockObject(
+                NULL_BRUSH
+            )
+        );
+
+    HBRUSH oldBrush =
+        static_cast<HBRUSH>(
+            SelectObject(
+                dc,
+                nullBrush
+            )
+        );
+
+    Rectangle(
+        dc,
+        rect.left,
+        rect.top,
+        rect.right,
+        rect.bottom
     );
 
-    MoveWindow(
-        boostButton,
-        LEFT_MARGIN + 180,
-        12 - scrollY,
-        95,
-        30,
-        TRUE
+    SelectObject(
+        dc,
+        oldBrush
     );
 
-    MoveWindow(
-        instrumentsButton,
-        LEFT_MARGIN + 280,
-        12 - scrollY,
-        110,
-        30,
-        TRUE
+    SelectObject(
+        dc,
+        oldPen
     );
 
-    MoveWindow(
-        chordsButton,
-        LEFT_MARGIN + 395,
-        12 - scrollY,
-        90,
-        30,
-        TRUE
+    DeleteObject(
+        pen
     );
 
-    MoveWindow(
-        drumsButton,
-        LEFT_MARGIN + 490,
-        12 - scrollY,
-        80,
-        30,
-        TRUE
+    // --------------------------------------------------------
+    // Text
+    // --------------------------------------------------------
+
+    char text[256];
+
+    GetWindowTextA(
+        dis->hwndItem,
+        text,
+        sizeof(text)
     );
 
-    // TEMPO
-
-    MoveWindow(
-        tempoMinusButton,
-        LEFT_MARGIN,
-        55 - scrollY,
-        35,
-        28,
-        TRUE
+    SetBkMode(
+        dc,
+        TRANSPARENT
     );
 
-    MoveWindow(
-        tempoLabel,
-        LEFT_MARGIN + 40,
-        55 - scrollY,
-        120,
-        28,
-        TRUE
+    SetTextColor(
+        dc,
+        BUTTON_TEXT
     );
 
-    MoveWindow(
-        tempoPlusButton,
-        LEFT_MARGIN + 165,
-        55 - scrollY,
-        35,
-        28,
-        TRUE
+    HFONT font =
+        static_cast<HFONT>(
+            GetStockObject(
+                DEFAULT_GUI_FONT
+            )
+        );
+
+    HFONT oldFont =
+        static_cast<HFONT>(
+            SelectObject(
+                dc,
+                font
+            )
+        );
+
+    if (pressed)
+    {
+        OffsetRect(
+            &rect,
+            1,
+            1
+        );
+    }
+
+    DrawTextA(
+        dc,
+        text,
+        -1,
+        &rect,
+        DT_CENTER |
+        DT_VCENTER |
+        DT_SINGLELINE
     );
 
-    // PITCH
-
-    MoveWindow(
-        pitchMinusButton,
-        LEFT_MARGIN,
-        88 - scrollY,
-        35,
-        28,
-        TRUE
-    );
-
-    MoveWindow(
-        pitchLabel,
-        LEFT_MARGIN + 40,
-        88 - scrollY,
-        120,
-        28,
-        TRUE
-    );
-
-    MoveWindow(
-        pitchPlusButton,
-        LEFT_MARGIN + 165,
-        88 - scrollY,
-        35,
-        28,
-        TRUE
-    );
-
-    // SAVE
-
-    MoveWindow(
-        saveTrackButton,
-        LEFT_MARGIN,
-        125 - scrollY,
-        200,
-        32,
-        TRUE
-    );
-
-    // PLAY ALL
-
-    MoveWindow(
-        playAllTracksButton,
-        LEFT_MARGIN + 210,
-        125 - scrollY,
-        150,
-        32,
-        TRUE
-    );
-
-    // EDITOR
-
-    MoveWindow(
-        songEditor,
-        LEFT_MARGIN,
-        EDITOR_TOP - scrollY,
-        width,
-        EDITOR_HEIGHT,
-        TRUE
-    );
-
-    ResizeTrackButtons();
-
-    UpdateScrollBar(
-        mainWindow
+    SelectObject(
+        dc,
+        oldFont
     );
 }
 
 // ============================================================
-// SAVE TRACK
+// SAVE CURRENT TRACK
 // ============================================================
 
-void SaveTrack()
+void SaveCurrentTrack()
 {
     std::string text =
         GetEditorText();
@@ -2573,19 +2659,24 @@ void SaveTrack()
     {
         MessageBoxA(
             mainWindow,
-            "There is nothing in the editor to save.",
-            "Save Track",
+            "The editor is empty.",
+            "SAVE TRACK",
             MB_OK | MB_ICONINFORMATION
         );
 
         return;
     }
 
-    savedTracks.push_back(text);
+    savedTracks.push_back(
+        text
+    );
 
-    SetEditorText("");
-
-    ResizeControls();
+    MessageBoxA(
+        mainWindow,
+        "Track saved.",
+        "SAVE TRACK",
+        MB_OK | MB_ICONINFORMATION
+    );
 
     InvalidateRect(
         mainWindow,
@@ -2598,66 +2689,15 @@ void SaveTrack()
 // LOAD TRACK
 // ============================================================
 
-void LoadTrack(int index)
+void LoadTrack(
+    size_t index)
 {
-    if (
-        index < 0 ||
-        index >= static_cast<int>(
-            savedTracks.size()))
-    {
+    if (index >= savedTracks.size())
         return;
-    }
-
-    stopRequested = true;
 
     SetEditorText(
         savedTracks[index]
     );
-
-    SetFocus(
-        songEditor
-    );
-}
-
-// ============================================================
-// DELETE TRACK
-// ============================================================
-
-void DeleteTrack(int index)
-{
-    if (
-        index < 0 ||
-        index >= static_cast<int>(
-            savedTracks.size()))
-    {
-        return;
-    }
-
-    if (playing)
-        stopRequested = true;
-
-    std::string message =
-        "Delete TRACK " +
-        std::to_string(index + 1) +
-        "?";
-
-    int result =
-        MessageBoxA(
-            mainWindow,
-            message.c_str(),
-            "Delete Track",
-            MB_YESNO |
-            MB_ICONWARNING
-        );
-
-    if (result != IDYES)
-        return;
-
-    savedTracks.erase(
-        savedTracks.begin() + index
-    );
-
-    ResizeControls();
 
     InvalidateRect(
         mainWindow,
@@ -2667,128 +2707,739 @@ void DeleteTrack(int index)
 }
 
 // ============================================================
-// PLAY SAVED TRACK
+// DELETE TRACK
 // ============================================================
 
-void PlaySavedTrack(int index)
+void DeleteTrack(
+    size_t index)
 {
-    if (
-        index < 0 ||
-        index >= static_cast<int>(
-            savedTracks.size()))
-    {
+    if (index >= savedTracks.size())
         return;
-    }
 
-    if (playing)
-    {
-        stopRequested = true;
-        return;
-    }
+    savedTracks.erase(
+        savedTracks.begin() +
+        static_cast<std::ptrdiff_t>(
+            index
+        )
+    );
 
-    std::string text =
-        savedTracks[index];
-
-    std::thread(
-        PlaySongText,
-        text
-    ).detach();
+    InvalidateRect(
+        mainWindow,
+        nullptr,
+        TRUE
+    );
 }
 
 // ============================================================
-// PLAY ALL SAVED TRACKS
+// TEMPO CONTROL
 // ============================================================
 
-void PlayAllSavedTracks()
+void ChangeTempo(
+    double amount)
 {
-    if (playing)
-        return;
+    double tempo =
+        currentTempo.load();
 
-    if (savedTracks.empty())
-    {
-        MessageBoxA(
-            mainWindow,
-            "There are no saved tracks to play.",
-            "Play All",
-            MB_OK | MB_ICONINFORMATION
+    tempo += amount;
+
+    tempo =
+        std::max(
+            MIN_TEMPO,
+            std::min(
+                MAX_TEMPO,
+                tempo
+            )
         );
 
-        return;
-    }
+    currentTempo =
+        tempo;
 
-    // Make a copy so the playlist stays stable
-    // while it is playing.
-    std::vector<std::string> playlist =
-        savedTracks;
-
-    stopRequested = false;
-
-    std::thread(
-        [playlist]()
-        {
-            for (const std::string& track :
-                 playlist)
-            {
-                if (stopRequested)
-                    break;
-
-                if (track.empty())
-                    continue;
-
-                PlaySongText(track);
-
-                if (stopRequested)
-                    break;
-            }
-
-            stopRequested = false;
-        }
-    ).detach();
+    UpdateTempoDisplay();
 }
 
 // ============================================================
-// WINDOW PROCEDURE
+// PITCH CONTROL
 // ============================================================
 
-LRESULT CALLBACK WindowProcedure(
-    HWND window,
+void ChangePitch(
+    int amount)
+{
+    int pitch =
+        currentPitch.load();
+
+    pitch += amount;
+
+    pitch =
+        std::max(
+            MIN_PITCH,
+            std::min(
+                MAX_PITCH,
+                pitch
+            )
+        );
+
+    currentPitch =
+        pitch;
+
+    UpdatePitchDisplay();
+}
+
+// ============================================================
+// BOOST CONTROL
+// ============================================================
+
+void ChangeBoost()
+{
+    int boost =
+        volumeBoost.load();
+
+    boost++;
+
+    if (boost > 3)
+        boost = 0;
+
+    volumeBoost =
+        boost;
+
+    UpdateBoostDisplay();
+}
+
+// ============================================================
+// TRACK BUTTON INFORMATION
+// ============================================================
+
+enum TrackButtonAction
+{
+    TRACK_LOAD = 0,
+    TRACK_PLAY,
+    TRACK_DELETE
+};
+
+UINT MakeTrackCommand(
+    UINT base,
+    size_t index)
+{
+    return
+        base +
+        static_cast<UINT>(
+            index
+        );
+}
+
+// ============================================================
+// BUILD TRACK CONTROLS
+// ============================================================
+
+void RebuildTrackControls()
+{
+    // --------------------------------------------------------
+    // Remove old track controls.
+    //
+    // IDs are in the track ranges, so scan child windows.
+    // --------------------------------------------------------
+
+    std::vector<HWND> children;
+
+    HWND child =
+        GetWindow(
+            mainWindow,
+            GW_CHILD
+        );
+
+    while (child)
+    {
+        HWND next =
+            GetWindow(
+                child,
+                GW_HWNDNEXT
+            );
+
+        LONG_PTR id =
+            GetWindowLongPtrA(
+                child,
+                GWLP_ID
+            );
+
+        if (
+            (id >= ID_LOAD_TRACK_BASE &&
+             id < ID_LOAD_TRACK_BASE + 1000)
+            ||
+            (id >= ID_PLAY_TRACK_BASE &&
+             id < ID_PLAY_TRACK_BASE + 1000)
+            ||
+            (id >= ID_DELETE_TRACK_BASE &&
+             id < ID_DELETE_TRACK_BASE + 1000)
+        )
+        {
+            children.push_back(
+                child
+            );
+        }
+
+        child =
+            next;
+    }
+
+    for (HWND hwnd : children)
+    {
+        DestroyWindow(
+            hwnd
+        );
+    }
+
+    // --------------------------------------------------------
+    // Create controls for each saved track.
+    // --------------------------------------------------------
+
+    int y =
+        TRACK_TOP -
+        scrollY;
+
+    for (
+        size_t i = 0;
+        i < savedTracks.size();
+        ++i)
+    {
+        char label[64];
+
+        std::snprintf(
+            label,
+            sizeof(label),
+            "TRACK %d",
+            static_cast<int>(
+                i + 1
+            )
+        );
+
+        HWND trackLabel =
+            CreateWindowExA(
+                0,
+                "STATIC",
+                label,
+                WS_CHILD |
+                WS_VISIBLE,
+                LEFT_MARGIN,
+                y,
+                100,
+                TRACK_BUTTON_HEIGHT,
+                mainWindow,
+                nullptr,
+                GetModuleHandleA(nullptr),
+                nullptr
+            );
+
+        SetTextColor(
+            GetDC(trackLabel),
+            TEXT_COLOR
+        );
+
+        CreateCustomButton(
+            "LOAD",
+            120,
+            y,
+            90,
+            TRACK_BUTTON_HEIGHT,
+            MakeTrackCommand(
+                ID_LOAD_TRACK_BASE,
+                i
+            )
+        );
+
+        CreateCustomButton(
+            "PLAY",
+            218,
+            y,
+            90,
+            TRACK_BUTTON_HEIGHT,
+            MakeTrackCommand(
+                ID_PLAY_TRACK_BASE,
+                i
+            )
+        );
+
+        CreateCustomButton(
+            "DELETE",
+            316,
+            y,
+            90,
+            TRACK_BUTTON_HEIGHT,
+            MakeTrackCommand(
+                ID_DELETE_TRACK_BASE,
+                i
+            )
+        );
+
+        y +=
+            TRACK_BUTTON_HEIGHT +
+            TRACK_GAP;
+    }
+
+    contentHeight =
+        std::max(
+            900,
+            y + 100
+        );
+
+    InvalidateRect(
+        mainWindow,
+        nullptr,
+        TRUE
+    );
+}
+
+// ============================================================
+// CREATE MAIN CONTROLS
+// ============================================================
+
+void CreateMainControls()
+{
+    // --------------------------------------------------------
+    // PLAY
+    // --------------------------------------------------------
+
+    playButton =
+        CreateCustomButton(
+            "PLAY",
+            15,
+            20,
+            100,
+            40,
+            ID_PLAY
+        );
+
+    // --------------------------------------------------------
+    // PLAY ALL
+    // --------------------------------------------------------
+
+    playAllButton =
+        CreateCustomButton(
+            "PLAY ALL",
+            125,
+            20,
+            110,
+            40,
+            ID_PLAY_ALL
+        );
+
+    // --------------------------------------------------------
+    // LOOP
+    // --------------------------------------------------------
+
+    loopButton =
+        CreateCustomButton(
+            "LOOP: OFF",
+            245,
+            20,
+            110,
+            40,
+            ID_LOOP
+        );
+
+    // --------------------------------------------------------
+    // BOOST
+    // --------------------------------------------------------
+
+    boostButton =
+        CreateCustomButton(
+            "BOOST: 1.0x",
+            365,
+            20,
+            120,
+            40,
+            ID_BOOST
+        );
+
+    // --------------------------------------------------------
+    // INSTRUMENTS
+    // --------------------------------------------------------
+
+    instrumentsButton =
+        CreateCustomButton(
+            "INSTRUMENTS",
+            15,
+            75,
+            130,
+            40,
+            ID_INSTRUMENTS
+        );
+
+    // --------------------------------------------------------
+    // CHORDS
+    // --------------------------------------------------------
+
+    chordsButton =
+        CreateCustomButton(
+            "CHORDS",
+            155,
+            75,
+            110,
+            40,
+            ID_CHORDS
+        );
+
+    // --------------------------------------------------------
+    // DRUMS
+    // --------------------------------------------------------
+
+    drumsButton =
+        CreateCustomButton(
+            "DRUMS",
+            275,
+            75,
+            110,
+            40,
+            ID_DRUMS
+        );
+
+    // --------------------------------------------------------
+    // TEMPO
+    // --------------------------------------------------------
+
+    tempoMinusButton =
+        CreateCustomButton(
+            "-",
+            405,
+            75,
+            40,
+            40,
+            ID_TEMPO_MINUS
+        );
+
+    tempoPlusButton =
+        CreateCustomButton(
+            "+",
+            495,
+            75,
+            40,
+            40,
+            ID_TEMPO_PLUS
+        );
+
+    tempoLabel =
+        CreateWindowExA(
+            0,
+            "STATIC",
+            "TEMPO: 120",
+            WS_CHILD |
+            WS_VISIBLE |
+            SS_CENTER,
+            445,
+            75,
+            50,
+            40,
+            mainWindow,
+            nullptr,
+            GetModuleHandleA(nullptr),
+            nullptr
+        );
+
+    // --------------------------------------------------------
+    // PITCH
+    // --------------------------------------------------------
+
+    pitchMinusButton =
+        CreateCustomButton(
+            "-",
+            405,
+            125,
+            40,
+            40,
+            ID_PITCH_MINUS
+        );
+
+    pitchPlusButton =
+        CreateCustomButton(
+            "+",
+            495,
+            125,
+            40,
+            40,
+            ID_PITCH_PLUS
+        );
+
+    pitchLabel =
+        CreateWindowExA(
+            0,
+            "STATIC",
+            "PITCH: 0",
+            WS_CHILD |
+            WS_VISIBLE |
+            SS_CENTER,
+            445,
+            125,
+            50,
+            40,
+            mainWindow,
+            nullptr,
+            GetModuleHandleA(nullptr),
+            nullptr
+        );
+
+    // --------------------------------------------------------
+    // SAVE
+    // --------------------------------------------------------
+
+    saveTrackButton =
+        CreateCustomButton(
+            "SAVE TRACK",
+            560,
+            20,
+            130,
+            40,
+            ID_SAVE_TRACK
+        );
+
+    // --------------------------------------------------------
+    // EDITOR
+    // --------------------------------------------------------
+
+    songEditor =
+        CreateWindowExA(
+            WS_EX_CLIENTEDGE,
+            "EDIT",
+            "",
+            WS_CHILD |
+            WS_VISIBLE |
+            WS_VSCROLL |
+            WS_HSCROLL |
+            ES_MULTILINE |
+            ES_AUTOVSCROLL |
+            ES_AUTOHSCROLL |
+            ES_WANTRETURN,
+            LEFT_MARGIN,
+            EDITOR_TOP,
+            900,
+            EDITOR_HEIGHT,
+            mainWindow,
+            nullptr,
+            GetModuleHandleA(nullptr),
+            nullptr
+        );
+
+    // --------------------------------------------------------
+    // EDITOR FONT
+    // --------------------------------------------------------
+
+    HFONT editorFont =
+        CreateFontA(
+            16,
+            0,
+            0,
+            0,
+            FW_NORMAL,
+            FALSE,
+            FALSE,
+            FALSE,
+            ANSI_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            DEFAULT_QUALITY,
+            FIXED_PITCH |
+            FF_MODERN,
+            "Consolas"
+        );
+
+    SendMessage(
+        songEditor,
+        WM_SETFONT,
+        reinterpret_cast<WPARAM>(
+            editorFont
+        ),
+        TRUE
+    );
+
+    // --------------------------------------------------------
+    // EDITOR BRUSH
+    // --------------------------------------------------------
+
+    editBrush =
+        CreateSolidBrush(
+            EDIT_BACKGROUND
+        );
+
+    UpdateTempoDisplay();
+    UpdatePitchDisplay();
+    UpdateBoostDisplay();
+
+    RebuildTrackControls();
+}
+
+// ============================================================
+// MAIN WINDOW PAINT
+// ============================================================
+
+void PaintMainWindow(
+    HWND hwnd,
+    HDC dc)
+{
+    RECT rect;
+
+    GetClientRect(
+        hwnd,
+        &rect
+    );
+
+    HBRUSH backgroundBrush =
+        CreateSolidBrush(
+            BACKGROUND
+        );
+
+    FillRect(
+        dc,
+        &rect,
+        backgroundBrush
+    );
+
+    DeleteObject(
+        backgroundBrush
+    );
+
+    // --------------------------------------------------------
+    // Title
+    // --------------------------------------------------------
+
+    SetBkMode(
+        dc,
+        TRANSPARENT
+    );
+
+    SetTextColor(
+        dc,
+        RGB(0, 0, 0)
+    );
+
+    HFONT titleFont =
+        CreateFontA(
+            24,
+            0,
+            0,
+            0,
+            FW_BOLD,
+            FALSE,
+            FALSE,
+            FALSE,
+            ANSI_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            DEFAULT_QUALITY,
+            DEFAULT_PITCH,
+            "Arial"
+        );
+
+    HFONT oldFont =
+        static_cast<HFONT>(
+            SelectObject(
+                dc,
+                titleFont
+            )
+        );
+
+    TextOutA(
+        dc,
+        15,
+        145,
+        "MUSIC TRACK EDITOR",
+        -1
+    );
+
+    SelectObject(
+        dc,
+        oldFont
+    );
+
+    DeleteObject(
+        titleFont
+    );
+
+    // --------------------------------------------------------
+    // Saved tracks title
+    // --------------------------------------------------------
+
+    HFONT normalFont =
+        static_cast<HFONT>(
+            GetStockObject(
+                DEFAULT_GUI_FONT
+            )
+        );
+
+    oldFont =
+        static_cast<HFONT>(
+            SelectObject(
+                dc,
+                normalFont
+            )
+        );
+
+    TextOutA(
+        dc,
+        LEFT_MARGIN,
+        TRACK_TOP - 30 - scrollY,
+        "SAVED TRACKS",
+        -1
+    );
+
+    SelectObject(
+        dc,
+        oldFont
+    );
+}
+
+// ============================================================
+// MAIN WINDOW PROCEDURE
+// ============================================================
+
+LRESULT CALLBACK MainWindowProc(
+    HWND hwnd,
     UINT message,
     WPARAM wParam,
     LPARAM lParam)
 {
     switch (message)
     {
-        // ====================================================
-        // BUTTON COLOR
-        // ====================================================
+        // ----------------------------------------------------
+        // CREATE
+        // ----------------------------------------------------
 
-        case WM_CTLCOLORBTN:
+        case WM_CREATE:
         {
-            HDC dc =
-                reinterpret_cast<HDC>(
-                    wParam
-                );
+            mainWindow =
+                hwnd;
 
-            SetTextColor(
-                dc,
-                BUTTON_TEXT
-            );
+            CreateMainControls();
 
-            SetBkMode(
-                dc,
-                TRANSPARENT
-            );
-
-            return reinterpret_cast<LRESULT>(
-                GetStockObject(
-                    NULL_BRUSH
-                )
-            );
+            return 0;
         }
 
-        // ====================================================
-        // EDIT COLOR
-        // ====================================================
+        // ----------------------------------------------------
+        // PAINT
+        // ----------------------------------------------------
+
+        case WM_PAINT:
+        {
+            PAINTSTRUCT ps;
+
+            HDC dc =
+                BeginPaint(
+                    hwnd,
+                    &ps
+                );
+
+            PaintMainWindow(
+                hwnd,
+                dc
+            );
+
+            EndPaint(
+                hwnd,
+                &ps
+            );
+
+            return 0;
+        }
+
+        // ----------------------------------------------------
+        // EDIT CONTROL COLORS
+        // ----------------------------------------------------
 
         case WM_CTLCOLOREDIT:
         {
@@ -2807,14 +3458,22 @@ LRESULT CALLBACK WindowProcedure(
                 EDIT_BACKGROUND
             );
 
+            if (!editBrush)
+            {
+                editBrush =
+                    CreateSolidBrush(
+                        EDIT_BACKGROUND
+                    );
+            }
+
             return reinterpret_cast<LRESULT>(
                 editBrush
             );
         }
 
-        // ====================================================
-        // STATIC COLOR
-        // ====================================================
+        // ----------------------------------------------------
+        // STATIC CONTROL COLORS
+        // ----------------------------------------------------
 
         case WM_CTLCOLORSTATIC:
         {
@@ -2833,16 +3492,34 @@ LRESULT CALLBACK WindowProcedure(
                 TRANSPARENT
             );
 
+            HBRUSH brush =
+                CreateSolidBrush(
+                    BACKGROUND
+                );
+
             return reinterpret_cast<LRESULT>(
-                GetStockObject(
-                    NULL_BRUSH
-                )
+                brush
             );
         }
 
-        // ====================================================
-        // COMMAND
-        // ====================================================
+        // ----------------------------------------------------
+        // OWNER DRAW
+        // ----------------------------------------------------
+
+        case WM_DRAWITEM:
+        {
+            DrawOwnerButton(
+                reinterpret_cast<
+                    LPDRAWITEMSTRUCT
+                >(lParam)
+            );
+
+            return TRUE;
+        }
+
+        // ----------------------------------------------------
+        // COMMANDS
+        // ----------------------------------------------------
 
         case WM_COMMAND:
         {
@@ -2855,25 +3532,17 @@ LRESULT CALLBACK WindowProcedure(
 
             if (id == ID_PLAY)
             {
-                if (!playing)
-                {
-                    SetWindowTextA(
-                        playButton,
-                        "STOP"
-                    );
+                PlayEditor();
+                return 0;
+            }
 
-                    PlayEditor();
-                }
-                else
-                {
-                    stopRequested = true;
+            // ------------------------------------------------
+            // PLAY ALL
+            // ------------------------------------------------
 
-                    SetWindowTextA(
-                        playButton,
-                        "PLAY"
-                    );
-                }
-
+            if (id == ID_PLAY_ALL)
+            {
+                StartPlayAll();
                 return 0;
             }
 
@@ -2883,12 +3552,15 @@ LRESULT CALLBACK WindowProcedure(
 
             if (id == ID_LOOP)
             {
-                looping =
+                bool newValue =
                     !looping.load();
+
+                looping =
+                    newValue;
 
                 SetWindowTextA(
                     loopButton,
-                    looping
+                    newValue
                         ? "LOOP: ON"
                         : "LOOP: OFF"
                 );
@@ -2902,19 +3574,7 @@ LRESULT CALLBACK WindowProcedure(
 
             if (id == ID_BOOST)
             {
-                int level =
-                    volumeBoost.load();
-
-                level++;
-
-                if (level > 3)
-                    level = 0;
-
-                volumeBoost =
-                    level;
-
-                UpdateBoostDisplay();
-
+                ChangeBoost();
                 return 0;
             }
 
@@ -2949,89 +3609,45 @@ LRESULT CALLBACK WindowProcedure(
             }
 
             // ------------------------------------------------
-            // TEMPO MINUS
+            // TEMPO
             // ------------------------------------------------
 
             if (id == ID_TEMPO_MINUS)
             {
-                double tempo =
-                    currentTempo.load();
-
-                tempo -= TEMPO_STEP;
-
-                if (tempo < MIN_TEMPO)
-                    tempo = MIN_TEMPO;
-
-                currentTempo =
-                    tempo;
-
-                UpdateTempoDisplay();
+                ChangeTempo(
+                    -TEMPO_STEP
+                );
 
                 return 0;
             }
-
-            // ------------------------------------------------
-            // TEMPO PLUS
-            // ------------------------------------------------
 
             if (id == ID_TEMPO_PLUS)
             {
-                double tempo =
-                    currentTempo.load();
-
-                tempo += TEMPO_STEP;
-
-                if (tempo > MAX_TEMPO)
-                    tempo = MAX_TEMPO;
-
-                currentTempo =
-                    tempo;
-
-                UpdateTempoDisplay();
+                ChangeTempo(
+                    TEMPO_STEP
+                );
 
                 return 0;
             }
 
             // ------------------------------------------------
-            // PITCH MINUS
+            // PITCH
             // ------------------------------------------------
 
             if (id == ID_PITCH_MINUS)
             {
-                int pitch =
-                    currentPitch.load();
-
-                pitch -= PITCH_STEP;
-
-                if (pitch < MIN_PITCH)
-                    pitch = MIN_PITCH;
-
-                currentPitch =
-                    pitch;
-
-                UpdatePitchDisplay();
+                ChangePitch(
+                    -PITCH_STEP
+                );
 
                 return 0;
             }
 
-            // ------------------------------------------------
-            // PITCH PLUS
-            // ------------------------------------------------
-
             if (id == ID_PITCH_PLUS)
             {
-                int pitch =
-                    currentPitch.load();
-
-                pitch += PITCH_STEP;
-
-                if (pitch > MAX_PITCH)
-                    pitch = MAX_PITCH;
-
-                currentPitch =
-                    pitch;
-
-                UpdatePitchDisplay();
+                ChangePitch(
+                    PITCH_STEP
+                );
 
                 return 0;
             }
@@ -3042,153 +3658,140 @@ LRESULT CALLBACK WindowProcedure(
 
             if (id == ID_SAVE_TRACK)
             {
-                SaveTrack();
-                return 0;
-            }
+                SaveCurrentTrack();
 
-            // ------------------------------------------------
-            // PLAY ALL
-            // ------------------------------------------------
-
-            if (id == ID_PLAY_ALL_TRACKS)
-            {
-                if (!playing)
-                {
-                    SetWindowTextA(
-                        playAllTracksButton,
-                        "PLAYING ALL..."
-                    );
-
-                    PlayAllSavedTracks();
-                }
-                else
-                {
-                    stopRequested = true;
-
-                    SetWindowTextA(
-                        playAllTracksButton,
-                        "PLAY ALL"
-                    );
-                }
+                RebuildTrackControls();
 
                 return 0;
             }
 
             // ------------------------------------------------
-            // NOTE SELECTOR
-            // ------------------------------------------------
-
-            auto noteFound =
-                noteCommands.find(id);
-
-            if (
-                noteFound !=
-                noteCommands.end())
-            {
-                InsertEditorText(
-                    noteFound->second +
-                    "\r\n"
-                );
-
-                return 0;
-            }
-
-            // ------------------------------------------------
-            // CHORD SELECTOR
-            // ------------------------------------------------
-
-            auto chordFound =
-                chordCommands.find(id);
-
-            if (
-                chordFound !=
-                chordCommands.end())
-            {
-                InsertEditorText(
-                    chordFound->second
-                );
-
-                return 0;
-            }
-
-            // ------------------------------------------------
-            // DRUM SELECTOR
-            // ------------------------------------------------
-
-            auto drumFound =
-                drumCommands.find(id);
-
-            if (
-                drumFound !=
-                drumCommands.end())
-            {
-                InsertEditorText(
-                    drumFound->second +
-                    "\r\n"
-                );
-
-                return 0;
-            }
-
-            // ------------------------------------------------
-            // DELETE SAVED TRACK
-            // ------------------------------------------------
-
-            if (
-                id >= ID_DELETE_TRACK_BASE &&
-                id <
-                ID_DELETE_TRACK_BASE +
-                savedTracks.size())
-            {
-                int index =
-                    static_cast<int>(
-                        id -
-                        ID_DELETE_TRACK_BASE
-                    );
-
-                DeleteTrack(index);
-
-                return 0;
-            }
-
-            // ------------------------------------------------
-            // PLAY SAVED TRACK
-            // ------------------------------------------------
-
-            if (
-                id >= ID_PLAY_TRACK_BASE &&
-                id <
-                ID_PLAY_TRACK_BASE +
-                savedTracks.size())
-            {
-                int index =
-                    static_cast<int>(
-                        id -
-                        ID_PLAY_TRACK_BASE
-                    );
-
-                PlaySavedTrack(index);
-
-                return 0;
-            }
-
-            // ------------------------------------------------
-            // LOAD SAVED TRACK
+            // LOAD TRACK
             // ------------------------------------------------
 
             if (
                 id >= ID_LOAD_TRACK_BASE &&
-                id <
-                ID_LOAD_TRACK_BASE +
-                savedTracks.size())
+                id < ID_LOAD_TRACK_BASE + 1000)
             {
-                int index =
-                    static_cast<int>(
+                size_t index =
+                    static_cast<size_t>(
                         id -
                         ID_LOAD_TRACK_BASE
                     );
 
-                LoadTrack(index);
+                LoadTrack(
+                    index
+                );
+
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // PLAY TRACK
+            // ------------------------------------------------
+
+            if (
+                id >= ID_PLAY_TRACK_BASE &&
+                id < ID_PLAY_TRACK_BASE + 1000)
+            {
+                size_t index =
+                    static_cast<size_t>(
+                        id -
+                        ID_PLAY_TRACK_BASE
+                    );
+
+                if (
+                    index <
+                    savedTracks.size()
+                )
+                {
+                    if (!playing)
+                    {
+                        std::thread(
+                            PlaySongText,
+                            savedTracks[index]
+                        ).detach();
+                    }
+                }
+
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // DELETE TRACK
+            // ------------------------------------------------
+
+            if (
+                id >= ID_DELETE_TRACK_BASE &&
+                id < ID_DELETE_TRACK_BASE + 1000)
+            {
+                size_t index =
+                    static_cast<size_t>(
+                        id -
+                        ID_DELETE_TRACK_BASE
+                    );
+
+                DeleteTrack(
+                    index
+                );
+
+                RebuildTrackControls();
+
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // INSERT NOTE
+            // ------------------------------------------------
+
+            auto noteIt =
+                noteCommands.find(id);
+
+            if (
+                noteIt !=
+                noteCommands.end())
+            {
+                InsertEditorText(
+                    noteIt->second +
+                    "\r\n"
+                );
+
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // INSERT CHORD
+            // ------------------------------------------------
+
+            auto chordIt =
+                chordCommands.find(id);
+
+            if (
+                chordIt !=
+                chordCommands.end())
+            {
+                InsertEditorText(
+                    chordIt->second
+                );
+
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // INSERT DRUM
+            // ------------------------------------------------
+
+            auto drumIt =
+                drumCommands.find(id);
+
+            if (
+                drumIt !=
+                drumCommands.end())
+            {
+                InsertEditorText(
+                    drumIt->second +
+                    "\r\n"
+                );
 
                 return 0;
             }
@@ -3196,9 +3799,26 @@ LRESULT CALLBACK WindowProcedure(
             break;
         }
 
-        // ====================================================
+        // ----------------------------------------------------
+        // KEYBOARD
+        // ----------------------------------------------------
+
+        case WM_KEYDOWN:
+        {
+            if (wParam == VK_ESCAPE)
+            {
+                stopRequested =
+                    true;
+
+                return 0;
+            }
+
+            break;
+        }
+
+        // ----------------------------------------------------
         // MOUSE WHEEL
-        // ====================================================
+        // ----------------------------------------------------
 
         case WM_MOUSEWHEEL:
         {
@@ -3208,337 +3828,40 @@ LRESULT CALLBACK WindowProcedure(
                 );
 
             if (delta > 0)
-                scrollY -= 80;
+            {
+                scrollY -= 40;
+            }
             else
-                scrollY += 80;
-
-            RECT rect;
-
-            GetClientRect(
-                window,
-                &rect
-            );
-
-            contentHeight =
-                CalculateContentHeight(
-                    rect
-                );
-
-            int maximum =
-                contentHeight -
-                rect.bottom;
-
-            if (maximum < 0)
-                maximum = 0;
+            {
+                scrollY += 40;
+            }
 
             if (scrollY < 0)
                 scrollY = 0;
 
-            if (scrollY > maximum)
-                scrollY = maximum;
+            int maxScroll =
+                std::max(
+                    0,
+                    contentHeight -
+                    800
+                );
 
-            ResizeControls();
+            if (scrollY > maxScroll)
+                scrollY = maxScroll;
 
-            InvalidateRect(
-                window,
-                nullptr,
-                TRUE
-            );
+            RebuildTrackControls();
 
             return 0;
         }
 
-        // ====================================================
-        // VERTICAL SCROLL
-        // ====================================================
-
-        case WM_VSCROLL:
-        {
-            SCROLLINFO si = {};
-
-            si.cbSize =
-                sizeof(SCROLLINFO);
-
-            si.fMask =
-                SIF_ALL;
-
-            GetScrollInfo(
-                window,
-                SB_VERT,
-                &si
-            );
-
-            int newPos =
-                si.nPos;
-
-            switch (LOWORD(wParam))
-            {
-                case SB_LINEUP:
-                    newPos -= 40;
-                    break;
-
-                case SB_LINEDOWN:
-                    newPos += 40;
-                    break;
-
-                case SB_PAGEUP:
-                    newPos -=
-                        static_cast<int>(
-                            si.nPage
-                        );
-                    break;
-
-                case SB_PAGEDOWN:
-                    newPos +=
-                        static_cast<int>(
-                            si.nPage
-                        );
-                    break;
-
-                case SB_THUMBTRACK:
-                    newPos =
-                        si.nTrackPos;
-                    break;
-
-                case SB_TOP:
-                    newPos =
-                        si.nMin;
-                    break;
-
-                case SB_BOTTOM:
-                    newPos =
-                        si.nMax;
-                    break;
-            }
-
-            int maximum =
-                si.nMax -
-                static_cast<int>(
-                    si.nPage
-                );
-
-            if (maximum < 0)
-                maximum = 0;
-
-            if (newPos < 0)
-                newPos = 0;
-
-            if (newPos > maximum)
-                newPos = maximum;
-
-            scrollY =
-                newPos;
-
-            SetScrollPos(
-                window,
-                SB_VERT,
-                scrollY,
-                TRUE
-            );
-
-            ResizeControls();
-
-            InvalidateRect(
-                window,
-                nullptr,
-                TRUE
-            );
-
-            return 0;
-        }
-
-        // ====================================================
-        // RESIZE
-        // ====================================================
-
-        case WM_SIZE:
-        {
-            ResizeControls();
-
-            InvalidateRect(
-                window,
-                nullptr,
-                TRUE
-            );
-
-            return 0;
-        }
-
-        // ====================================================
-        // PAINT
-        // ====================================================
-
-        case WM_PAINT:
-        {
-            PAINTSTRUCT ps;
-
-            HDC dc =
-                BeginPaint(
-                    window,
-                    &ps
-                );
-
-            RECT rect;
-
-            GetClientRect(
-                window,
-                &rect
-            );
-
-            HBRUSH backgroundBrush =
-                CreateSolidBrush(
-                    BACKGROUND
-                );
-
-            FillRect(
-                dc,
-                &rect,
-                backgroundBrush
-            );
-
-            DeleteObject(
-                backgroundBrush
-            );
-
-            // TOP BAR
-
-            RECT topBar =
-            {
-                0,
-                0,
-                rect.right,
-                175
-            };
-
-            HBRUSH topBrush =
-                CreateSolidBrush(
-                    RGB(10, 10, 14)
-                );
-
-            FillRect(
-                dc,
-                &topBar,
-                topBrush
-            );
-
-            DeleteObject(
-                topBrush
-            );
-
-            // EDITOR BORDER
-
-            RECT editorArea =
-            {
-                LEFT_MARGIN - 3,
-                EDITOR_TOP - scrollY - 3,
-                rect.right -
-                    LEFT_MARGIN +
-                    3,
-                EDITOR_TOP -
-                    scrollY +
-                    EDITOR_HEIGHT +
-                    3
-            };
-
-            HPEN pen =
-                CreatePen(
-                    PS_SOLID,
-                    2,
-                    COLUMN_BORDER
-                );
-
-            HPEN oldPen =
-                static_cast<HPEN>(
-                    SelectObject(
-                        dc,
-                        pen
-                    )
-                );
-
-            HBRUSH oldBrush =
-            static_cast<HBRUSH>(
-               SelectObject(
-               dc,
-               GetStockObject(
-                NULL_BRUSH
-               )
-            )
-            );
-
-            Rectangle(
-                dc,
-                editorArea.left,
-                editorArea.top,
-                editorArea.right,
-                editorArea.bottom
-            );
-
-            SelectObject(
-                dc,
-                oldBrush
-            );
-
-            SelectObject(
-                dc,
-                oldPen
-            );
-
-            DeleteObject(pen);
-
-            // SAVED TRACKS LABEL
-
-            SetTextColor(
-                dc,
-                TEXT_COLOR
-            );
-
-            SetBkMode(
-                dc,
-                TRANSPARENT
-            );
-
-            HFONT oldFont =
-                static_cast<HFONT>(
-                    SelectObject(
-                        dc,
-                        GetStockObject(
-                            DEFAULT_GUI_FONT
-                        )
-                    )
-                );
-
-            TextOutA(
-                dc,
-                LEFT_MARGIN,
-                TRACK_TOP -
-                scrollY -
-                28,
-                "SAVED TRACKS",
-                12
-            );
-
-            SelectObject(
-                dc,
-                oldFont
-            );
-
-            EndPaint(
-                window,
-                &ps
-            );
-
-            return 0;
-        }
-
-        // ====================================================
+        // ----------------------------------------------------
         // DESTROY
-        // ====================================================
+        // ----------------------------------------------------
 
         case WM_DESTROY:
         {
-            stopRequested = true;
-
-            DestroyTrackButtons();
+            stopRequested =
+                true;
 
             if (editBrush)
             {
@@ -3546,17 +3869,20 @@ LRESULT CALLBACK WindowProcedure(
                     editBrush
                 );
 
-                editBrush = nullptr;
+                editBrush =
+                    nullptr;
             }
 
-            PostQuitMessage(0);
+            PostQuitMessage(
+                0
+            );
 
             return 0;
         }
     }
 
     return DefWindowProcA(
-        window,
+        hwnd,
         message,
         wParam,
         lParam
@@ -3564,101 +3890,99 @@ LRESULT CALLBACK WindowProcedure(
 }
 
 // ============================================================
-// CREATE BUTTON
+// REGISTER WINDOW CLASS
 // ============================================================
 
-HWND CreateButton(
-    const char* text,
-    UINT id,
+bool RegisterMainWindowClass(
     HINSTANCE instance)
 {
-    return CreateWindowA(
-        "BUTTON",
-        text,
-        WS_VISIBLE |
-        WS_CHILD |
-        BS_PUSHBUTTON,
-        0,
-        0,
-        100,
-        30,
-        mainWindow,
-        reinterpret_cast<HMENU>(
-            static_cast<INT_PTR>(
-                id
+    WNDCLASSEXA wc = {};
+
+    wc.cbSize =
+        sizeof(WNDCLASSEXA);
+
+    wc.style =
+        CS_HREDRAW |
+        CS_VREDRAW;
+
+    wc.lpfnWndProc =
+        MainWindowProc;
+
+    wc.hInstance =
+        instance;
+
+    wc.hCursor =
+        LoadCursor(
+            nullptr,
+            IDC_ARROW
+        );
+
+    wc.hbrBackground =
+        reinterpret_cast<HBRUSH>(
+            GetStockObject(
+                NULL_BRUSH
             )
-        ),
-        instance,
-        nullptr
-    );
+        );
+
+    wc.lpszClassName =
+        "MusicTrackEditorWindow";
+
+    return
+        RegisterClassExA(
+            &wc
+        ) != 0;
 }
 
 // ============================================================
-// MAIN
+// DEFAULT SONG
+// ============================================================
+
+const char* DEFAULT_SONG =
+"TRACK 1 TEMPO 120\r\n"
+"LENGTH 8\r\n"
+"GUITAR C4 0 1\r\n"
+"GUITAR E4 0 1\r\n"
+"GUITAR G4 0 1\r\n"
+"DRUM KICK 0\r\n"
+"DRUM SNARE 2\r\n"
+"GUITAR F4 4 1\r\n"
+"GUITAR A4 4 1\r\n"
+"GUITAR C5 4 1\r\n"
+"DRUM KICK 4\r\n";
+
+// ============================================================
+// WINMAIN
 // ============================================================
 
 int WINAPI WinMain(
     HINSTANCE instance,
     HINSTANCE,
     LPSTR,
-    int)
+    int showCommand)
 {
-    const char CLASS_NAME[] =
-        "CppSongMakerOnePlayer";
-
-    // ========================================================
-    // EDIT BRUSH
-    // ========================================================
-
-    editBrush =
-        CreateSolidBrush(
-            EDIT_BACKGROUND
-        );
-
-    // ========================================================
-    // WINDOW CLASS
-    // ========================================================
-
-    WNDCLASSA windowClass = {};
-
-    windowClass.lpfnWndProc =
-        WindowProcedure;
-
-    windowClass.hInstance =
-        instance;
-
-    windowClass.lpszClassName =
-        CLASS_NAME;
-
-    windowClass.hbrBackground =
-        CreateSolidBrush(
-            BACKGROUND
-        );
-
-    windowClass.hCursor =
-        LoadCursorA(
+    if (!RegisterMainWindowClass(
+            instance))
+    {
+        MessageBoxA(
             nullptr,
-            IDC_ARROW
+            "Could not register the window.",
+            "Error",
+            MB_OK | MB_ICONERROR
         );
 
-    RegisterClassA(
-        &windowClass
-    );
-
-    // ========================================================
-    // WINDOW
-    // ========================================================
+        return 1;
+    }
 
     mainWindow =
         CreateWindowExA(
-            WS_EX_COMPOSITED,
-            CLASS_NAME,
-            "C++ Song Maker - One Player",
+            0,
+            "MusicTrackEditorWindow",
+            "Music Track Editor",
             WS_OVERLAPPEDWINDOW |
-            WS_VSCROLL,
+            WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            1100,
+            1000,
             850,
             nullptr,
             nullptr,
@@ -3667,209 +3991,31 @@ int WINAPI WinMain(
         );
 
     if (!mainWindow)
-        return 0;
-
-    // ========================================================
-    // TOP BUTTONS
-    // ========================================================
-
-    playButton =
-        CreateButton(
-            "PLAY",
-            ID_PLAY,
-            instance
-        );
-
-    loopButton =
-        CreateButton(
-            "LOOP: OFF",
-            ID_LOOP,
-            instance
-        );
-
-    boostButton =
-        CreateButton(
-            "BOOST: 1.0x",
-            ID_BOOST,
-            instance
-        );
-
-    instrumentsButton =
-        CreateButton(
-            "INSTRUMENTS",
-            ID_INSTRUMENTS,
-            instance
-        );
-
-    chordsButton =
-        CreateButton(
-            "CHORDS",
-            ID_CHORDS,
-            instance
-        );
-
-    drumsButton =
-        CreateButton(
-            "DRUMS",
-            ID_DRUMS,
-            instance
-        );
-
-    // ========================================================
-    // TEMPO
-    // ========================================================
-
-    tempoMinusButton =
-        CreateButton(
-            "-",
-            ID_TEMPO_MINUS,
-            instance
-        );
-
-    tempoLabel =
-        CreateWindowA(
-            "STATIC",
-            "TEMPO: 120",
-            WS_VISIBLE |
-            WS_CHILD |
-            SS_CENTER |
-            SS_CENTERIMAGE,
-            0,
-            0,
-            120,
-            28,
-            mainWindow,
+    {
+        MessageBoxA(
             nullptr,
-            instance,
-            nullptr
+            "Could not create the main window.",
+            "Error",
+            MB_OK | MB_ICONERROR
         );
 
-    tempoPlusButton =
-        CreateButton(
-            "+",
-            ID_TEMPO_PLUS,
-            instance
-        );
-
-    // ========================================================
-    // PITCH
-    // ========================================================
-
-    pitchMinusButton =
-        CreateButton(
-            "-",
-            ID_PITCH_MINUS,
-            instance
-        );
-
-    pitchLabel =
-        CreateWindowA(
-            "STATIC",
-            "PITCH: 0",
-            WS_VISIBLE |
-            WS_CHILD |
-            SS_CENTER |
-            SS_CENTERIMAGE,
-            0,
-            0,
-            120,
-            28,
-            mainWindow,
-            nullptr,
-            instance,
-            nullptr
-        );
-
-    pitchPlusButton =
-        CreateButton(
-            "+",
-            ID_PITCH_PLUS,
-            instance
-        );
-
-    // ========================================================
-    // SAVE
-    // ========================================================
-
-    saveTrackButton =
-        CreateButton(
-            "SAVE TRACK",
-            ID_SAVE_TRACK,
-            instance
-        );
-
-    // ========================================================
-    // PLAY ALL
-    // ========================================================
-
-    playAllTracksButton =
-        CreateButton(
-            "PLAY ALL",
-            ID_PLAY_ALL_TRACKS,
-            instance
-        );
-
-    // ========================================================
-    // EDITOR
-    // ========================================================
-
-    songEditor =
-        CreateWindowExA(
-            WS_EX_CLIENTEDGE,
-            "EDIT",
-            "",
-            WS_VISIBLE |
-            WS_CHILD |
-            WS_VSCROLL |
-            ES_MULTILINE |
-            ES_AUTOVSCROLL |
-            ES_WANTRETURN |
-            ES_NOHIDESEL,
-            0,
-            0,
-            500,
-            EDITOR_HEIGHT,
-            mainWindow,
-            nullptr,
-            instance,
-            nullptr
-        );
-
-    SendMessageA(
-        songEditor,
-        WM_SETFONT,
-        reinterpret_cast<WPARAM>(
-            GetStockObject(
-                DEFAULT_GUI_FONT
-            )
-        ),
-        TRUE
-    );
-
-    // ========================================================
-    // INITIAL LAYOUT
-    // ========================================================
-
-    ResizeControls();
-
-    // ========================================================
-    // SHOW
-    // ========================================================
+        return 1;
+    }
 
     ShowWindow(
         mainWindow,
-        SW_SHOW
+        showCommand
     );
 
     UpdateWindow(
         mainWindow
     );
 
-    // ========================================================
-    // MESSAGE LOOP
-    // ========================================================
+    SetEditorText(
+        DEFAULT_SONG
+    );
 
-    MSG message = {};
+    MSG message;
 
     while (
         GetMessageA(
@@ -3877,7 +4023,7 @@ int WINAPI WinMain(
             nullptr,
             0,
             0
-        ))
+        ) > 0)
     {
         TranslateMessage(
             &message
@@ -3886,25 +4032,9 @@ int WINAPI WinMain(
         DispatchMessageA(
             &message
         );
-
-        if (
-            !playing &&
-            playButton)
-        {
-            SetWindowTextA(
-                playButton,
-                "PLAY"
-            );
-
-            if (playAllTracksButton)
-            {
-                SetWindowTextA(
-                    playAllTracksButton,
-                    "PLAY ALL"
-                );
-            }
-        }
     }
 
-    return 0;
+    return static_cast<int>(
+        message.wParam
+    );
 }
