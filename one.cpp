@@ -1419,7 +1419,7 @@ void PlaySongText(
 }
 
 // ============================================================
-// PLAY ALL SAVED TRACKS GAPLESS
+// PLAY ALL SAVED TRACKS GAPLESS + LOOP
 // ============================================================
 
 void PlayAllSavedTracks()
@@ -1472,10 +1472,7 @@ void PlayAllSavedTracks()
         }
 
         // ----------------------------------------------------
-        // IMPORTANT:
-        //
-        // Track samples are appended directly.
-        // There is NO silence inserted here.
+        // No silence is inserted between tracks.
         // ----------------------------------------------------
 
         combinedSamples.insert(
@@ -1571,37 +1568,51 @@ void PlayAllSavedTracks()
         return;
     }
 
-    if (
-        waveOutWrite(
-            audioDevice,
-            &header,
-            sizeof(WAVEHDR)
-        ) != MMSYSERR_NOERROR)
-    {
-        waveOutUnprepareHeader(
-            audioDevice,
-            &header,
-            sizeof(WAVEHDR)
-        );
-
-        waveOutClose(audioDevice);
-
-        playing = false;
-        playingAll = false;
-
-        return;
-    }
-
     // --------------------------------------------------------
-    // WAIT UNTIL THE ENTIRE COMBINED SONG FINISHES
+    // PLAY ALL
+    //
+    // If LOOP is OFF:
+    //     Play the complete combined buffer once.
+    //
+    // If LOOP is ON:
+    //     Play the complete combined buffer repeatedly.
+    //
+    // This keeps the saved tracks gapless.
     // --------------------------------------------------------
 
     while (!stopRequested)
     {
-        if (header.dwFlags & WHDR_DONE)
+        // Reset the DONE flag before another playback pass.
+        header.dwFlags &= ~WHDR_DONE;
+
+        if (
+            waveOutWrite(
+                audioDevice,
+                &header,
+                sizeof(WAVEHDR)
+            ) != MMSYSERR_NOERROR)
+        {
+            break;
+        }
+
+        // Wait for the entire PLAY ALL sequence.
+        while (!stopRequested)
+        {
+            if (header.dwFlags & WHDR_DONE)
+                break;
+
+            Sleep(1);
+        }
+
+        if (stopRequested)
             break;
 
-        Sleep(1);
+        // LOOP OFF = stop after one complete sequence.
+        if (!looping.load())
+            break;
+
+        // LOOP ON = automatically submit the same
+        // complete PLAY ALL sequence again.
     }
 
     // --------------------------------------------------------
@@ -2275,10 +2286,6 @@ void DrawButton(
         &rect
     );
 
-    // --------------------------------------------------------
-    // Background
-    // --------------------------------------------------------
-
     HBRUSH brush =
         CreateSolidBrush(
             COLUMN
@@ -2293,10 +2300,6 @@ void DrawButton(
     DeleteObject(
         brush
     );
-
-    // --------------------------------------------------------
-    // Border
-    // --------------------------------------------------------
 
     HPEN pen =
         CreatePen(
@@ -2331,8 +2334,6 @@ void DrawButton(
         rect.bottom
     );
 
-    // Restore the original brush and pen.
-
     SelectObject(
         dc,
         oldBrush
@@ -2346,10 +2347,6 @@ void DrawButton(
     DeleteObject(
         pen
     );
-
-    // --------------------------------------------------------
-    // Text
-    // --------------------------------------------------------
 
     SetBkMode(
         dc,
@@ -2519,10 +2516,6 @@ void DrawOwnerButton(
         backgroundBrush
     );
 
-    // --------------------------------------------------------
-    // Border
-    // --------------------------------------------------------
-
     COLORREF borderColor =
         (dis->itemState & ODS_FOCUS)
             ? RGB(0, 255, 0)
@@ -2542,10 +2535,6 @@ void DrawOwnerButton(
                 pen
             )
         );
-
-    // IMPORTANT:
-    // NULL_BRUSH is selected separately.
-    // Do NOT put the semicolon inside static_cast.
 
     HBRUSH nullBrush =
         static_cast<HBRUSH>(
@@ -2583,10 +2572,6 @@ void DrawOwnerButton(
     DeleteObject(
         pen
     );
-
-    // --------------------------------------------------------
-    // Text
-    // --------------------------------------------------------
 
     char text[256];
 
@@ -2832,12 +2817,6 @@ UINT MakeTrackCommand(
 
 void RebuildTrackControls()
 {
-    // --------------------------------------------------------
-    // Remove old track controls.
-    //
-    // IDs are in the track ranges, so scan child windows.
-    // --------------------------------------------------------
-
     std::vector<HWND> children;
 
     HWND child =
@@ -2887,10 +2866,6 @@ void RebuildTrackControls()
         );
     }
 
-    // --------------------------------------------------------
-    // Create controls for each saved track.
-    // --------------------------------------------------------
-
     int y =
         TRACK_TOP -
         scrollY;
@@ -2928,9 +2903,17 @@ void RebuildTrackControls()
                 nullptr
             );
 
+        HDC labelDC =
+            GetDC(trackLabel);
+
         SetTextColor(
-            GetDC(trackLabel),
+            labelDC,
             TEXT_COLOR
+        );
+
+        ReleaseDC(
+            trackLabel,
+            labelDC
         );
 
         CreateCustomButton(
@@ -3548,6 +3531,8 @@ LRESULT CALLBACK MainWindowProc(
 
             // ------------------------------------------------
             // LOOP
+            //
+            // This now controls PLAY ALL looping.
             // ------------------------------------------------
 
             if (id == ID_LOOP)
