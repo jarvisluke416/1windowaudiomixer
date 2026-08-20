@@ -1,4 +1,5 @@
 # 1windowaudiomixer
+audio.exe now has mp3 converter
 g++ "main.cpp" -o "C++Audio.exe" -lwinmm -lgdi32
 
 EXAMPLE DRUM LOOP
