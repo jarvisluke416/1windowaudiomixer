@@ -1,0 +1,6851 @@
+#include <windows.h>
+#include <mmsystem.h>
+#include <commdlg.h>
+#include <algorithm>
+#include <atomic>
+#include <cctype>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <map>
+#include <random>
+#include <sstream>
+#include <string>
+#include <thread>
+#include <vector>
+
+#pragma comment(lib, "winmm.lib")
+#pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "comdlg32.lib")
+
+// ============================================================
+// SETTINGS
+// ============================================================
+
+const int SAMPLE_RATE = 44100;
+const double PI = 3.14159265358979323846;
+
+const double MIN_TEMPO = 40.0;
+const double MAX_TEMPO = 480.0;
+const double TEMPO_STEP = 5.0;
+
+const int MIN_PITCH = -12;
+const int MAX_PITCH = 12;
+const int PITCH_STEP = 1;
+
+constexpr double MASTER_VOLUME = 3.0;
+constexpr double MASTER_HEADROOM = 0.95;
+
+
+
+// ============================================================
+// FFMPEG
+// ============================================================
+
+// Change this if ffmpeg.exe is stored somewhere else.
+//
+// Example:
+// const char* FFMPEG_PATH =
+//     "C:\\ffmpeg\\bin\\ffmpeg.exe";
+
+const char* FFMPEG_PATH = "C:\\ffmpeg\\ffmpeg-9.0.1-essentials_build\\bin\\ffmpeg.exe";
+
+// ============================================================
+// COLORS
+// ============================================================
+
+const COLORREF BACKGROUND = RGB(0, 207, 74);
+const COLORREF COLUMN = RGB(32, 32, 38);
+const COLORREF COLUMN_BORDER = RGB(55, 55, 65);
+const COLORREF TEXT_COLOR = RGB(255, 255, 255);
+const COLORREF BUTTON_TEXT = RGB(0, 255, 0);
+const COLORREF EDIT_BACKGROUND = RGB(15, 15, 20);
+const COLORREF EDIT_TEXT = RGB(255, 255, 255);
+
+// ============================================================
+// MAIN WINDOW
+// ============================================================
+
+HWND mainWindow = nullptr;
+
+HWND playButton = nullptr;
+HWND playAllButton = nullptr;
+HWND loopButton = nullptr;
+HWND boostButton = nullptr;
+
+HWND instrumentsButton = nullptr;
+HWND chordsButton = nullptr;
+HWND drumsButton = nullptr;
+
+HWND tempoMinusButton = nullptr;
+HWND tempoPlusButton = nullptr;
+HWND tempoLabel = nullptr;
+
+HWND pitchMinusButton = nullptr;
+HWND pitchPlusButton = nullptr;
+HWND pitchLabel = nullptr;
+
+HWND saveTrackButton = nullptr;
+HWND combineSaveButton = nullptr;
+HWND importButton = nullptr;
+
+HWND exportWavButton = nullptr;
+HWND exportMp3Button = nullptr;
+HWND exportMp4Button = nullptr;
+
+HWND songEditor = nullptr;
+
+HBRUSH editBrush = nullptr;
+
+// ============================================================
+// PLAYER STATE
+// ============================================================
+
+std::atomic_bool playing(false);
+std::atomic_bool looping(false);
+std::atomic_bool stopRequested(false);
+std::atomic_bool playingAll(false);
+
+std::atomic<double> currentTempo(120.0);
+std::atomic<int> currentPitch(0);
+std::atomic<int> volumeBoost(0);
+
+// ============================================================
+// LAYOUT
+// ============================================================
+
+const int LEFT_MARGIN = 15;
+const int EDITOR_TOP = 205;
+const int EDITOR_HEIGHT = 350;
+
+const int TRACK_TOP = 580;
+const int TRACK_BUTTON_HEIGHT = 36;
+const int TRACK_GAP = 8;
+
+int scrollY = 0;
+int contentHeight = 900;
+
+// ============================================================
+// SAVED TRACKS
+// ============================================================
+
+std::vector<std::string> savedTracks;
+
+// ============================================================
+// COMMAND IDS
+// ============================================================
+
+const UINT ID_PLAY = 1000;
+const UINT ID_PLAY_ALL = 1011;
+const UINT ID_LOOP = 1001;
+const UINT ID_BOOST = 1002;
+
+const UINT ID_INSTRUMENTS = 1003;
+const UINT ID_CHORDS = 1004;
+const UINT ID_DRUMS = 1005;
+
+const UINT ID_TEMPO_MINUS = 1006;
+const UINT ID_TEMPO_PLUS = 1007;
+
+const UINT ID_PITCH_MINUS = 1008;
+const UINT ID_PITCH_PLUS = 1009;
+
+const UINT ID_SAVE_TRACK = 1010;
+const UINT ID_COMBINE_SAVE = 1012;
+const UINT ID_IMPORT_TRACKS = 1013;
+
+const UINT ID_EXPORT_WAV = 1014;
+const UINT ID_EXPORT_MP3 = 1015;
+const UINT ID_EXPORT_MP4 = 1016;
+
+const UINT ID_LOAD_TRACK_BASE = 3000;
+const UINT ID_PLAY_TRACK_BASE = 4000;
+const UINT ID_DELETE_TRACK_BASE = 5000;
+
+const UINT ID_NOTE_BASE = 10000;
+const UINT ID_CHORD_BASE = 20000;
+const UINT ID_DRUM_BASE = 30000;
+
+std::map<UINT, std::string> noteCommands;
+std::map<UINT, std::string> chordCommands;
+std::map<UINT, std::string> drumCommands;
+
+// ============================================================
+// SONG DATA
+// ============================================================
+
+struct NoteEvent
+{
+    double startBeat;
+    double durationBeats;
+    double frequency;
+    std::string instrument;
+};
+
+struct DrumEvent
+{
+    double startBeat;
+    std::string type;
+};
+
+// ============================================================
+// RANDOM NOISE
+// ============================================================
+
+double noise()
+{
+    thread_local std::mt19937 generator(
+        std::random_device{}()
+    );
+
+    thread_local std::uniform_real_distribution<double>
+        distribution(-1.0, 1.0);
+
+    return distribution(generator);
+}
+
+// ============================================================
+// UPPERCASE
+// ============================================================
+
+std::string upper(std::string value)
+{
+    for (char& c : value)
+    {
+        if (c >= 'a' && c <= 'z')
+            c = static_cast<char>(c - 'a' + 'A');
+    }
+
+    return value;
+}
+
+// ============================================================
+// NOTE FREQUENCY
+// ============================================================
+
+double noteFrequency(const std::string& note)
+{
+    if (note.size() < 2)
+        return 0.0;
+
+    char letter = note[0];
+
+    int semitoneFromC = -1;
+
+    switch (letter)
+    {
+        case 'C': semitoneFromC = 0; break;
+        case 'D': semitoneFromC = 2; break;
+        case 'E': semitoneFromC = 4; break;
+        case 'F': semitoneFromC = 5; break;
+        case 'G': semitoneFromC = 7; break;
+        case 'A': semitoneFromC = 9; break;
+        case 'B': semitoneFromC = 11; break;
+        default: return 0.0;
+    }
+
+    size_t position = 1;
+
+    if (
+        position < note.size() &&
+        note[position] == '#')
+    {
+        semitoneFromC++;
+        position++;
+    }
+
+    if (position >= note.size())
+        return 0.0;
+
+    int octave = 0;
+
+    try
+    {
+        octave = std::stoi(
+            note.substr(position)
+        );
+    }
+    catch (...)
+    {
+        return 0.0;
+    }
+
+    if (semitoneFromC >= 12)
+    {
+        semitoneFromC -= 12;
+        octave++;
+    }
+
+    int midiNote =
+        (octave + 1) * 12 +
+        semitoneFromC;
+
+    if (midiNote < 21 || midiNote > 108)
+        return 0.0;
+
+    return 440.0 *
+        std::pow(
+            2.0,
+            (midiNote - 69) / 12.0
+        );
+}
+
+// ============================================================
+// PIANO NOTES
+// ============================================================
+
+std::vector<std::string> GetNotes()
+{
+    std::vector<std::string> notes;
+
+    const char* names[] =
+    {
+        "C","C#","D","D#","E","F",
+        "F#","G","G#","A","A#","B"
+    };
+
+    for (int midi = 21; midi <= 108; ++midi)
+    {
+        int octave = (midi / 12) - 1;
+        int index = midi % 12;
+
+        notes.push_back(
+            std::string(names[index]) +
+            std::to_string(octave)
+        );
+    }
+
+    return notes;
+}
+
+// ============================================================
+// INSTRUMENTS
+// ============================================================
+
+std::vector<std::string> GetInstruments()
+{
+    return
+    {
+        "PIANO",
+        "BRIGHT ACOUSTIC PIANO",
+        "ELECTRIC GRAND PIANO",
+        "HONKY TONK PIANO",
+        "ELECTRIC PIANO 1",
+        "ELECTRIC PIANO 2",
+        "HARPSICHORD",
+        "CLAVINET",
+
+        "CELESTA",
+        "GLOCKENSPIEL",
+        "MUSIC BOX",
+        "VIBRAPHONE",
+        "MARIMBA",
+        "XYLOPHONE",
+        "TUBULAR BELLS",
+        "DULCIMER",
+
+        "DRAWBAR ORGAN",
+        "PERCUSSIVE ORGAN",
+        "ROCK ORGAN",
+        "CHURCH ORGAN",
+        "REED ORGAN",
+        "ACCORDION",
+        "HARMONICA",
+        "TANGO ACCORDION",
+
+        "ACOUSTIC GUITAR NYLON",
+        "ACOUSTIC GUITAR STEEL",
+        "ELECTRIC GUITAR JAZZ",
+        "ELECTRIC GUITAR CLEAN",
+        "ELECTRIC GUITAR MUTED",
+        "OVERDRIVEN GUITAR",
+        "DISTORTION GUITAR",
+        "GUITAR HARMONICS",
+
+        "ACOUSTIC BASS",
+        "ELECTRIC BASS FINGER",
+        "ELECTRIC BASS PICK",
+        "FRETLESS BASS",
+        "SLAP BASS 1",
+        "SLAP BASS 2",
+        "SYNTH BASS 1",
+        "SYNTH BASS 2",
+
+        "VIOLIN",
+        "VIOLA",
+        "CELLO",
+        "CONTRABASS",
+        "TREMOLO STRINGS",
+        "PIZZICATO STRINGS",
+        "ORCHESTRAL HARP",
+        "TIMPANI",
+
+        "STRING ENSEMBLE 1",
+        "STRING ENSEMBLE 2",
+        "SYNTH STRINGS 1",
+        "SYNTH STRINGS 2",
+        "CHOIR Aahs",
+        "VOICE Oohs",
+        "SYNTH VOICE",
+        "ORCHESTRA HIT",
+
+        "TRUMPET",
+        "TROMBONE",
+        "TUBA",
+        "MUTED TRUMPET",
+        "FRENCH HORN",
+        "BRASS SECTION",
+        "SYNTH BRASS 1",
+        "SYNTH BRASS 2",
+
+        "SOPRANO SAX",
+        "ALTO SAX",
+        "TENOR SAX",
+        "BARITONE SAX",
+        "OBOE",
+        "ENGLISH HORN",
+        "BASSOON",
+        "CLARINET",
+
+        "PICCOLO",
+        "FLUTE",
+        "RECORDER",
+        "PAN FLUTE",
+        "BLOWN BOTTLE",
+        "SHAKUHACHI",
+        "WHISTLE",
+        "OCARINA",
+
+        "LEAD 1 SQUARE",
+        "LEAD 2 SAWTOOTH",
+        "LEAD 3 CALLIOPE",
+        "LEAD 4 CHIFF",
+        "LEAD 5 CHARANG",
+        "LEAD 6 VOICE",
+        "LEAD 7 FIFTHS",
+        "LEAD 8 BASS LEAD",
+
+        "PAD 1 NEW AGE",
+        "PAD 2 WARM",
+        "PAD 3 POLYSYNTH",
+        "PAD 4 CHOIR",
+        "PAD 5 BOWED",
+        "PAD 6 METALLIC",
+        "PAD 7 HALO",
+        "PAD 8 SWEEP",
+
+        "FX 1 RAIN",
+        "FX 2 SOUNDTRACK",
+        "FX 3 CRYSTAL",
+        "FX 4 ATMOSPHERE",
+        "FX 5 BRIGHTNESS",
+        "FX 6 GOBLINS",
+        "FX 7 ECHOES",
+        "FX 8 SCI FI",
+
+        "SITAR",
+        "BANJO",
+        "SHAMISEN",
+        "KOTO",
+        "KALIMBA",
+        "BAGPIPE",
+        "FIDDLE",
+        "SHANAI",
+
+        "TINKLE BELL",
+        "AGOGO",
+        "STEEL DRUMS",
+        "WOODBLOCK",
+        "TAIKO DRUM",
+        "MELODIC TOM",
+        "SYNTH DRUM",
+        "REVERSE CYMBAL",
+
+        "GUITAR FRET NOISE",
+        "BREATH NOISE",
+        "SEASHORE",
+        "BIRD",
+        "TELEPHONE",
+        "HELICOPTER",
+        "APPLAUSE",
+        "GUNSHOT"
+    };
+}
+// ============================================================
+// INSTRUMENT WAVEFORM
+// ============================================================
+
+double instrumentWave(
+    const std::string& instrument,
+    double frequency,
+    double t)
+{
+    double phase =
+        2.0 * PI * frequency * t;
+
+    std::string name =
+        upper(instrument);
+
+    // ========================================================
+    // PIANO FAMILY
+    // ========================================================
+
+    if (
+        name == "PIANO" ||
+        name == "BRIGHT ACOUSTIC PIANO" ||
+        name == "ELECTRIC GRAND PIANO" ||
+        name == "HONKY TONK PIANO")
+    {
+        double decay = 1.0;
+
+        if (name == "BRIGHT ACOUSTIC PIANO")
+            decay = 2.2;
+        else if (name == "ELECTRIC GRAND PIANO")
+            decay = 1.9;
+        else if (name == "HONKY TONK PIANO")
+            decay = 2.8;
+
+        double envelope =
+            std::exp(-decay * t);
+
+        double sound =
+            std::sin(phase) * 0.90 +
+            std::sin(phase * 2.0) * 0.38 +
+            std::sin(phase * 3.0) * 0.18 +
+            std::sin(phase * 4.0) * 0.08;
+
+        if (name == "BRIGHT ACOUSTIC PIANO")
+        {
+            sound +=
+                std::sin(phase * 5.0) * 0.08;
+        }
+
+        if (name == "ELECTRIC GRAND PIANO")
+        {
+            sound +=
+                std::sin(phase * 6.0) * 0.06;
+        }
+
+        if (name == "HONKY TONK PIANO")
+        {
+            sound +=
+                std::sin(phase * 7.0) * 0.05;
+        }
+
+        return sound * envelope;
+    }
+
+    // ========================================================
+    // ELECTRIC PIANOS
+    // ========================================================
+
+    if (
+        name == "ELECTRIC PIANO 1" ||
+        name == "ELECTRIC PIANO 2")
+    {
+        double envelope =
+            std::exp(-1.3 * t);
+
+        double bell =
+            std::sin(phase * 2.0) *
+            0.35;
+
+        double body =
+            std::sin(phase) * 0.75 +
+            bell +
+            std::sin(phase * 3.0) * 0.18 +
+            std::sin(phase * 5.0) * 0.08;
+
+        if (name == "ELECTRIC PIANO 2")
+        {
+            body +=
+                std::sin(phase * 7.0) * 0.12;
+        }
+
+        return body * envelope;
+    }
+
+    // ========================================================
+    // HARPSICHORD / CLAVINET
+    // ========================================================
+
+    if (name == "HARPSICHORD")
+    {
+        return
+            (
+                std::sin(phase) * 0.75 +
+                std::sin(phase * 2.0) * 0.50 +
+                std::sin(phase * 3.0) * 0.30 +
+                std::sin(phase * 4.0) * 0.18
+            ) *
+            std::exp(-3.8 * t);
+    }
+
+    if (name == "CLAVINET")
+    {
+        double envelope =
+            std::exp(-7.0 * t);
+
+        return
+            (
+                std::sin(phase) * 0.55 +
+                std::sin(phase * 2.0) * 0.35 +
+                std::sin(phase * 4.0) * 0.25 +
+                std::sin(phase * 8.0) * 0.12
+            ) *
+            envelope;
+    }
+
+    // ========================================================
+    // MALLET / BELL FAMILY
+    // ========================================================
+
+    if (
+        name == "CELESTA" ||
+        name == "GLOCKENSPIEL" ||
+        name == "MUSIC BOX" ||
+        name == "VIBRAPHONE" ||
+        name == "MARIMBA" ||
+        name == "XYLOPHONE" ||
+        name == "TUBULAR BELLS" ||
+        name == "DULCIMER" ||
+        name == "TINKLE BELL")
+    {
+        double decay = 2.5;
+
+        if (name == "GLOCKENSPIEL")
+            decay = 4.5;
+        else if (name == "MUSIC BOX")
+            decay = 5.5;
+        else if (name == "XYLOPHONE")
+            decay = 4.0;
+        else if (name == "MARIMBA")
+            decay = 2.8;
+        else if (name == "VIBRAPHONE")
+            decay = 1.5;
+        else if (name == "TUBULAR BELLS")
+            decay = 1.2;
+
+        double envelope =
+            std::exp(-decay * t);
+
+        double sound =
+            std::sin(phase) * 0.80 +
+            std::sin(phase * 2.0) * 0.35 +
+            std::sin(phase * 3.0) * 0.20;
+
+        if (
+            name == "GLOCKENSPIEL" ||
+            name == "TINKLE BELL" ||
+            name == "TUBULAR BELLS")
+        {
+            sound +=
+                std::sin(phase * 2.71) * 0.30;
+        }
+
+        return sound * envelope;
+    }
+
+    // ========================================================
+    // ORGAN FAMILY
+    // ========================================================
+
+    if (
+        name == "DRAWBAR ORGAN" ||
+        name == "PERCUSSIVE ORGAN" ||
+        name == "ROCK ORGAN" ||
+        name == "CHURCH ORGAN" ||
+        name == "REED ORGAN")
+    {
+        double sound =
+            std::sin(phase) * 0.60 +
+            std::sin(phase * 2.0) * 0.30 +
+            std::sin(phase * 3.0) * 0.18 +
+            std::sin(phase * 4.0) * 0.12 +
+            std::sin(phase * 8.0) * 0.05;
+
+        if (name == "ROCK ORGAN")
+            sound += std::sin(phase * 6.0) * 0.15;
+
+        if (name == "CHURCH ORGAN")
+            sound += std::sin(phase * 16.0) * 0.06;
+
+        return sound;
+    }
+
+    // ========================================================
+    // ACCORDION / HARMONICA
+    // ========================================================
+
+    if (
+        name == "ACCORDION" ||
+        name == "TANGO ACCORDION")
+    {
+        double vibrato =
+            1.0 +
+            0.006 *
+            std::sin(2.0 * PI * 5.0 * t);
+
+        double p =
+            phase * vibrato;
+
+        return
+            std::sin(p) * 0.65 +
+            std::sin(p * 2.0) * 0.35 +
+            std::sin(p * 3.0) * 0.18 +
+            std::sin(p * 4.0) * 0.10;
+    }
+
+    if (name == "HARMONICA")
+    {
+        return
+            (
+                std::sin(phase) * 0.65 +
+                std::sin(phase * 2.0) * 0.30 +
+                std::sin(phase * 3.0) * 0.15
+            ) *
+            (0.8 + 0.2 * std::sin(phase * 0.5));
+    }
+
+    // ========================================================
+    // GUITARS
+    // ========================================================
+
+    if (
+        name == "ACOUSTIC GUITAR NYLON" ||
+        name == "ACOUSTIC GUITAR STEEL" ||
+        name == "ELECTRIC GUITAR JAZZ" ||
+        name == "ELECTRIC GUITAR CLEAN" ||
+        name == "ELECTRIC GUITAR MUTED" ||
+        name == "OVERDRIVEN GUITAR" ||
+        name == "DISTORTION GUITAR" ||
+        name == "GUITAR HARMONICS" ||
+        name == "GUITAR")
+    {
+        double decay = 3.8;
+
+        if (name == "ACOUSTIC GUITAR NYLON")
+            decay = 4.2;
+        else if (name == "ACOUSTIC GUITAR STEEL")
+            decay = 3.3;
+        else if (name == "ELECTRIC GUITAR JAZZ")
+            decay = 2.2;
+        else if (name == "ELECTRIC GUITAR MUTED")
+            decay = 9.0;
+        else if (name == "OVERDRIVEN GUITAR")
+            decay = 2.5;
+        else if (name == "DISTORTION GUITAR")
+            decay = 1.8;
+
+        double attack =
+            1.0 -
+            std::exp(-120.0 * t);
+
+        double envelope =
+            std::exp(-decay * t);
+
+        double sound =
+            std::sin(phase) * 0.60 +
+            std::sin(phase * 2.0) * 0.30 +
+            std::sin(phase * 3.0) * 0.18 +
+            std::sin(phase * 5.0) * 0.08;
+
+        if (name == "GUITAR HARMONICS")
+        {
+            sound =
+                std::sin(phase * 2.0) * 0.55 +
+                std::sin(phase * 3.0) * 0.35 +
+                std::sin(phase * 4.0) * 0.25;
+        }
+
+        if (name == "OVERDRIVEN GUITAR")
+            sound = std::tanh(sound * 2.2);
+
+        if (name == "DISTORTION GUITAR")
+            sound = std::tanh(sound * 4.5);
+
+        return sound * attack * envelope;
+    }
+
+    // ========================================================
+    // BASS
+    // ========================================================
+
+    if (
+        name == "ACOUSTIC BASS" ||
+        name == "ELECTRIC BASS FINGER" ||
+        name == "ELECTRIC BASS PICK" ||
+        name == "FRETLESS BASS" ||
+        name == "SLAP BASS 1" ||
+        name == "SLAP BASS 2" ||
+        name == "SYNTH BASS 1" ||
+        name == "SYNTH BASS 2" ||
+        name == "BASS")
+    {
+        double envelope =
+            std::exp(-1.2 * t);
+
+        double sound =
+            std::sin(phase) * 0.90 +
+            std::sin(phase * 2.0) * 0.28 +
+            std::sin(phase * 3.0) * 0.10;
+
+        if (
+            name == "SLAP BASS 1" ||
+            name == "SLAP BASS 2")
+        {
+            sound +=
+                std::sin(phase * 6.0) *
+                0.15 *
+                std::exp(-15.0 * t);
+        }
+
+        if (
+            name == "SYNTH BASS 1" ||
+            name == "SYNTH BASS 2")
+        {
+            sound =
+                std::sin(phase) * 0.75 +
+                std::sin(phase * 2.0) * 0.35;
+        }
+
+        return sound * envelope;
+    }
+
+    // ========================================================
+    // STRINGS
+    // ========================================================
+
+    if (
+        name == "VIOLIN" ||
+        name == "VIOLA" ||
+        name == "CELLO" ||
+        name == "CONTRABASS" ||
+        name == "TREMOLO STRINGS" ||
+        name == "PIZZICATO STRINGS" ||
+        name == "ORCHESTRAL HARP" ||
+        name == "STRING ENSEMBLE 1" ||
+        name == "STRING ENSEMBLE 2" ||
+        name == "SYNTH STRINGS 1" ||
+        name == "SYNTH STRINGS 2")
+    {
+        double attack =
+            1.0 -
+            std::exp(-5.0 * t);
+
+        double decay =
+            std::exp(-0.25 * t);
+
+        double vibrato =
+            1.0 +
+            0.004 *
+            std::sin(2.0 * PI * 5.0 * t);
+
+        double p =
+            phase * vibrato;
+
+        double sound =
+            std::sin(p) * 0.72 +
+            std::sin(p * 2.0) * 0.20 +
+            std::sin(p * 3.0) * 0.12;
+
+        if (name == "PIZZICATO STRINGS")
+        {
+            attack =
+                1.0 -
+                std::exp(-80.0 * t);
+
+            decay =
+                std::exp(-4.5 * t);
+        }
+
+        if (name == "TREMOLO STRINGS")
+        {
+            sound *=
+                0.75 +
+                0.25 *
+                std::sin(
+                    2.0 * PI * 7.0 * t
+                );
+        }
+
+        if (
+            name == "STRING ENSEMBLE 1" ||
+            name == "STRING ENSEMBLE 2")
+        {
+            sound +=
+                std::sin(p * 4.0) * 0.10;
+        }
+
+        return sound * attack * decay;
+    }
+
+    // ========================================================
+    // CHOIR / VOICE
+    // ========================================================
+
+    if (
+        name == "CHOIR AAHS" ||
+        name == "VOICE OOHS" ||
+        name == "SYNTH VOICE")
+    {
+        double vowel =
+            std::sin(phase) * 0.60 +
+            std::sin(phase * 2.0) * 0.30 +
+            std::sin(phase * 3.0) * 0.20 +
+            std::sin(phase * 4.0) * 0.10;
+
+        return
+            vowel *
+            (
+                0.75 +
+                0.25 *
+                std::sin(
+                    2.0 * PI * 5.0 * t
+                )
+            );
+    }
+
+    // ========================================================
+    // BRASS
+    // ========================================================
+
+    if (
+        name == "TRUMPET" ||
+        name == "TROMBONE" ||
+        name == "TUBA" ||
+        name == "MUTED TRUMPET" ||
+        name == "FRENCH HORN" ||
+        name == "BRASS SECTION" ||
+        name == "SYNTH BRASS 1" ||
+        name == "SYNTH BRASS 2")
+    {
+        double attack =
+            1.0 -
+            std::exp(-35.0 * t);
+
+        double sound =
+            std::sin(phase) * 0.45 +
+            std::sin(phase * 2.0) * 0.30 +
+            std::sin(phase * 3.0) * 0.25 +
+            std::sin(phase * 4.0) * 0.18 +
+            std::sin(phase * 5.0) * 0.12;
+
+        if (name == "MUTED TRUMPET")
+            sound *= 0.75;
+
+        if (name == "TUBA")
+            sound =
+                std::sin(phase) * 0.80 +
+                std::sin(phase * 2.0) * 0.20;
+
+        return sound * attack;
+    }
+
+    // ========================================================
+    // SAX / WOODWINDS
+    // ========================================================
+
+    if (
+        name == "SOPRANO SAX" ||
+        name == "ALTO SAX" ||
+        name == "TENOR SAX" ||
+        name == "BARITONE SAX")
+    {
+        double sound =
+            std::sin(phase) * 0.65 +
+            std::sin(phase * 2.0) * 0.28 +
+            std::sin(phase * 3.0) * 0.20 +
+            std::sin(phase * 4.0) * 0.12;
+
+        return
+            sound *
+            (
+                0.8 +
+                0.2 *
+                std::sin(
+                    2.0 * PI * 5.0 * t
+                )
+            );
+    }
+
+    if (
+        name == "OBOE" ||
+        name == "ENGLISH HORN" ||
+        name == "BASSOON" ||
+        name == "CLARINET")
+    {
+        double sound =
+            std::sin(phase) * 0.80 +
+            std::sin(phase * 3.0) * 0.20 +
+            std::sin(phase * 5.0) * 0.10;
+
+        if (name == "CLARINET")
+        {
+            sound =
+                std::sin(phase) * 0.85 +
+                std::sin(phase * 3.0) * 0.30 +
+                std::sin(phase * 5.0) * 0.12;
+        }
+
+        return
+            sound *
+            std::exp(-0.5 * t);
+    }
+
+    // ========================================================
+    // FLUTES
+    // ========================================================
+
+    if (
+        name == "PICCOLO" ||
+        name == "FLUTE" ||
+        name == "RECORDER" ||
+        name == "PAN FLUTE" ||
+        name == "BLOWN BOTTLE" ||
+        name == "SHAKUHACHI" ||
+        name == "WHISTLE" ||
+        name == "OCARINA")
+    {
+        double sound =
+            std::sin(phase) * 0.85 +
+            std::sin(phase * 2.0) * 0.10;
+
+        if (name == "PICCOLO")
+            sound +=
+                std::sin(phase * 3.0) * 0.08;
+
+        if (name == "WHISTLE")
+            sound =
+                std::sin(phase) * 0.95;
+
+        if (name == "OCARINA")
+            sound +=
+                std::sin(phase * 2.0) * 0.18;
+
+        return
+            sound *
+            std::exp(-0.7 * t);
+    }
+
+    // ========================================================
+    // SYNTH LEADS
+    // ========================================================
+
+    if (
+        name.find("LEAD ") == 0)
+    {
+        double saw =
+            2.0 *
+            (
+                frequency * t -
+                std::floor(
+                    frequency * t + 0.5
+                )
+            );
+
+        double square =
+            std::sin(phase) >= 0.0
+                ? 1.0
+                : -1.0;
+
+        if (
+            name == "LEAD 1 SQUARE")
+        {
+            return square * 0.70;
+        }
+
+        if (
+            name == "LEAD 2 SAWTOOTH")
+        {
+            return saw * 0.70;
+        }
+
+        if (
+            name == "LEAD 3 CALLIOPE")
+        {
+            return
+                saw * 0.55 +
+                std::sin(phase * 2.0) * 0.30;
+        }
+
+        if (
+            name == "LEAD 4 CHIFF")
+        {
+            return
+                saw * 0.50 +
+                std::sin(phase * 5.0) *
+                std::exp(-12.0 * t) *
+                0.30;
+        }
+
+        if (
+            name == "LEAD 5 CHARANG")
+        {
+            return
+                saw * 0.50 +
+                std::sin(phase * 2.0) * 0.35;
+        }
+
+        if (
+            name == "LEAD 6 VOICE")
+        {
+            return
+                std::sin(phase) * 0.60 +
+                std::sin(phase * 2.0) * 0.30;
+        }
+
+        if (
+            name == "LEAD 7 FIFTHS")
+        {
+            return
+                std::sin(phase) * 0.50 +
+                std::sin(phase * 1.5) * 0.40;
+        }
+
+        if (
+            name == "LEAD 8 BASS LEAD")
+        {
+            return
+                saw * 0.70;
+        }
+    }
+
+    // ========================================================
+    // SYNTH PADS
+    // ========================================================
+
+    if (
+        name.find("PAD ") == 0)
+    {
+        double saw =
+            2.0 *
+            (
+                frequency * t -
+                std::floor(
+                    frequency * t + 0.5
+                )
+            );
+
+        double slow =
+            0.7 +
+            0.3 *
+            std::sin(
+                2.0 * PI * 0.5 * t
+            );
+
+        return
+            (
+                saw * 0.45 +
+                std::sin(phase) * 0.40 +
+                std::sin(phase * 2.0) * 0.15
+            ) *
+            slow;
+    }
+
+    // ========================================================
+    // SYNTH BRASS / SPECIAL FX
+    // ========================================================
+
+    if (
+        name == "FX 1 RAIN" ||
+        name == "FX 2 SOUNDTRACK" ||
+        name == "FX 3 CRYSTAL" ||
+        name == "FX 4 ATMOSPHERE" ||
+        name == "FX 5 BRIGHTNESS" ||
+        name == "FX 6 GOBLINS" ||
+        name == "FX 7 ECHOES" ||
+        name == "FX 8 SCI FI")
+    {
+        double mod =
+            std::sin(
+                phase *
+                (
+                    1.0 +
+                    0.5 *
+                    std::sin(
+                        2.0 * PI * 0.7 * t
+                    )
+                )
+            );
+
+        double envelope =
+            std::exp(-0.35 * t);
+
+        return mod * envelope;
+    }
+
+    // ========================================================
+    // ETHNIC / WORLD
+    // ========================================================
+
+    if (
+        name == "SITAR" ||
+        name == "BANJO" ||
+        name == "SHAMISEN" ||
+        name == "KOTO" ||
+        name == "KALIMBA" ||
+        name == "BAGPIPE" ||
+        name == "FIDDLE" ||
+        name == "SHANAI")
+    {
+        double sound =
+            std::sin(phase) * 0.65 +
+            std::sin(phase * 2.0) * 0.30 +
+            std::sin(phase * 3.0) * 0.20;
+
+        double envelope =
+            std::exp(-2.5 * t);
+
+        if (name == "SITAR")
+            sound +=
+                std::sin(phase * 5.0) * 0.20;
+
+        if (name == "BANJO")
+            envelope =
+                std::exp(-5.0 * t);
+
+        if (name == "FIDDLE")
+            sound +=
+                std::sin(phase * 6.0) * 0.10;
+
+        if (name == "BAGPIPE")
+            envelope =
+                0.85 +
+                0.15 *
+                std::sin(
+                    2.0 * PI * 5.0 * t
+                );
+
+        return sound * envelope;
+    }
+
+    // ========================================================
+    // PERCUSSION / SOUND EFFECT MIDI PROGRAMS
+    // ========================================================
+
+    if (
+        name == "AGOGO" ||
+        name == "STEEL DRUMS" ||
+        name == "WOODBLOCK" ||
+        name == "TAIKO DRUM" ||
+        name == "MELODIC TOM" ||
+        name == "SYNTH DRUM" ||
+        name == "REVERSE CYMBAL")
+    {
+        double envelope =
+            std::exp(-4.0 * t);
+
+        double sound =
+            std::sin(phase) * 0.70 +
+            std::sin(phase * 2.0) * 0.25 +
+            std::sin(phase * 3.0) * 0.10;
+
+        if (name == "WOODBLOCK")
+        {
+            sound =
+                std::sin(phase * 2.0) * 0.70;
+        }
+
+        if (name == "SYNTH DRUM")
+        {
+            sound =
+                std::sin(phase) *
+                std::exp(-15.0 * t);
+        }
+
+        return sound * envelope;
+    }
+
+    // ========================================================
+    // SOUND EFFECTS
+    // ========================================================
+
+    if (
+        name == "GUITAR FRET NOISE" ||
+        name == "BREATH NOISE" ||
+        name == "SEASHORE" ||
+        name == "BIRD" ||
+        name == "TELEPHONE" ||
+        name == "HELICOPTER" ||
+        name == "APPLAUSE" ||
+        name == "GUNSHOT")
+    {
+        double noise =
+            std::sin(
+                phase * 17.0
+            ) *
+            std::sin(
+                phase * 23.0
+            );
+
+        if (name == "TELEPHONE")
+        {
+            return
+                (
+                    std::sin(phase * 2.0) +
+                    std::sin(phase * 3.0)
+                ) *
+                0.35;
+        }
+
+        if (name == "HELICOPTER")
+        {
+            return
+                std::sin(
+                    2.0 * PI *
+                    20.0 *
+                    t
+                ) *
+                std::sin(phase);
+        }
+
+        return
+            noise *
+            std::exp(-6.0 * t);
+    }
+
+    // ========================================================
+    // LEGACY / UNKNOWN
+    // ========================================================
+
+    if (name == "SYNTH")
+    {
+        double saw =
+            2.0 *
+            (
+                frequency * t -
+                std::floor(
+                    frequency * t + 0.5
+                )
+            );
+
+        return saw * 0.8;
+    }
+
+    if (name == "ORGAN")
+    {
+        return
+            std::sin(phase) * 0.65 +
+            std::sin(phase * 2.0) * 0.25 +
+            std::sin(phase * 4.0) * 0.12;
+    }
+
+    if (name == "FLUTE")
+    {
+        return
+            (
+                std::sin(phase) * 0.85 +
+                std::sin(phase * 2.0) * 0.10
+            ) *
+            std::exp(-0.8 * t);
+    }
+
+    if (name == "TRUMPET")
+    {
+        return
+            (
+                std::sin(phase) * 0.45 +
+                std::sin(phase * 2.0) * 0.30 +
+                std::sin(phase * 3.0) * 0.25
+            );
+    }
+
+    if (name == "BELL")
+    {
+        return
+            (
+                std::sin(phase) +
+                std::sin(phase * 2.71) * 0.4 +
+                std::sin(phase * 4.13) * 0.2
+            ) *
+            std::exp(-2.2 * t);
+    }
+
+    return std::sin(phase);
+}
+
+// ============================================================
+// DRUMS
+// ============================================================
+
+double kick(double t)
+{
+    if (t < 0.0 || t >= 0.8)
+        return 0.0;
+
+    double frequency =
+        155.0 * std::exp(-22.0 * t) + 48.0;
+
+    double body =
+        std::sin(
+            2.0 * PI * frequency * t
+        ) * std::exp(-6.0 * t);
+
+    double beater =
+        std::sin(
+            2.0 * PI * 95.0 * t
+        ) * std::exp(-55.0 * t);
+
+    double click =
+        noise() * std::exp(-140.0 * t);
+
+    return
+        body * 1.20 +
+        beater * 0.28 +
+        click * 0.025;
+}
+
+double snare(double t)
+{
+    if (t < 0.0 || t >= 0.5)
+        return 0.0;
+
+    double wire =
+        noise() * std::exp(-17.0 * t);
+
+    double body =
+        std::sin(
+            2.0 * PI * 190.0 * t
+        ) * std::exp(-19.0 * t);
+
+    double ring =
+        std::sin(
+            2.0 * PI * 330.0 * t
+        ) * std::exp(-27.0 * t);
+
+    double attack =
+        std::sin(
+            2.0 * PI * 1700.0 * t
+        ) * std::exp(-105.0 * t);
+
+    return
+        wire * 0.68 +
+        body * 0.48 +
+        ring * 0.16 +
+        attack * 0.14;
+}
+
+double closedHiHat(double t)
+{
+    if (t < 0.0 || t >= 0.18)
+        return 0.0;
+
+    double metal =
+        noise() * 0.72 +
+        std::sin(2.0 * PI * 6800.0 * t) * 0.14 +
+        std::sin(2.0 * PI * 8900.0 * t) * 0.10 +
+        std::sin(2.0 * PI * 11200.0 * t) * 0.06;
+
+    return
+        metal *
+        std::exp(-38.0 * t) *
+        0.55;
+}
+
+double openHiHat(double t)
+{
+    if (t < 0.0 || t >= 0.8)
+        return 0.0;
+
+    double metal =
+        noise() * 0.72 +
+        std::sin(2.0 * PI * 6200.0 * t) * 0.14 +
+        std::sin(2.0 * PI * 8400.0 * t) * 0.10 +
+        std::sin(2.0 * PI * 10500.0 * t) * 0.06;
+
+    double attack =
+        1.0 - std::exp(-120.0 * t);
+
+    return
+        metal *
+        attack *
+        std::exp(-5.0 * t) *
+        0.45;
+}
+
+double tom(double t, double frequency)
+{
+    if (t < 0.0 || t >= 0.9)
+        return 0.0;
+
+    double pitch =
+        frequency *
+        (
+            1.0 +
+            0.15 * std::exp(-8.0 * t)
+        );
+
+    double body =
+        std::sin(
+            2.0 * PI * pitch * t
+        );
+
+    double harmonic =
+        std::sin(
+            2.0 * PI * pitch * 1.98 * t
+        ) * 0.16;
+
+    double attack =
+        std::sin(
+            2.0 * PI * 700.0 * t
+        ) * std::exp(-45.0 * t);
+
+    return
+        (
+            body +
+            harmonic +
+            attack * 0.08
+        ) *
+        std::exp(-5.0 * t) *
+        0.75;
+}
+
+double crash(double t)
+{
+    if (t < 0.0 || t >= 2.5)
+        return 0.0;
+
+    double metal =
+        noise() * 0.72 +
+        std::sin(2.0 * PI * 3900.0 * t) * 0.10 +
+        std::sin(2.0 * PI * 5100.0 * t) * 0.08 +
+        std::sin(2.0 * PI * 7300.0 * t) * 0.06;
+
+    return
+        metal *
+        (1.0 - std::exp(-180.0 * t)) *
+        std::exp(-1.7 * t) *
+        0.65;
+}
+
+double ride(double t)
+{
+    if (t < 0.0 || t >= 1.5)
+        return 0.0;
+
+    double metallicNoise =
+        noise() * 0.32;
+
+    double bell =
+        std::sin(
+            2.0 * PI * 2800.0 * t
+        ) * 0.22;
+
+    double metallicTone =
+        std::sin(
+            2.0 * PI * 4700.0 * t
+        ) * 0.15;
+
+    return
+        (
+            metallicNoise +
+            bell +
+            metallicTone
+        ) *
+        std::exp(-2.7 * t) *
+        0.45;
+}
+
+double rimshot(double t)
+{
+    if (t < 0.0 || t >= 0.18)
+        return 0.0;
+
+    double attack =
+        std::sin(
+            2.0 * PI * 1250.0 * t
+        ) * std::exp(-45.0 * t);
+
+    double wood =
+        std::sin(
+            2.0 * PI * 420.0 * t
+        ) * std::exp(-35.0 * t);
+
+    double click =
+        noise() * std::exp(-75.0 * t);
+
+    return
+        attack * 0.65 +
+        wood * 0.30 +
+        click * 0.20;
+}
+
+// ============================================================
+// MAKE DRUM
+// ============================================================
+
+double makeDrum(
+    const std::string& type,
+    double t)
+{
+    // --------------------------------------------------------
+    // KICKS
+    // --------------------------------------------------------
+
+    if (
+        type == "KICK" ||
+        type == "KICK_2" ||
+        type == "KICK_3" ||
+        type == "BASS_DRUM" ||
+        type == "ELECTRONIC_KICK" ||
+        type == "SYNTH_KICK")
+    {
+        return kick(t);
+    }
+
+    // --------------------------------------------------------
+    // SNARES
+    // --------------------------------------------------------
+
+    if (
+        type == "SNARE" ||
+        type == "SNARE_2" ||
+        type == "SNARE_3" ||
+        type == "ELECTRONIC_SNARE" ||
+        type == "SYNTH_SNARE")
+    {
+        return snare(t);
+    }
+
+    // --------------------------------------------------------
+    // CLAPS
+    // --------------------------------------------------------
+
+    if (
+        type == "CLAP" ||
+        type == "HAND_CLAP" ||
+        type == "ELECTRONIC_CLAP" ||
+        type == "SYNTH_CLAP")
+    {
+        return snare(t) * 0.75;
+    }
+
+    // --------------------------------------------------------
+    // SIDE STICK / RIM
+    // --------------------------------------------------------
+
+    if (
+        type == "RIMSHOT" ||
+        type == "SIDE_STICK" ||
+        type == "SYNTH_RIM")
+    {
+        return rimshot(t);
+    }
+
+    // --------------------------------------------------------
+    // HI-HATS
+    // --------------------------------------------------------
+
+    if (
+        type == "HIHAT" ||
+        type == "HIHAT_PEDAL" ||
+        type == "ELECTRONIC_HIHAT")
+    {
+        return closedHiHat(t);
+    }
+
+    if (
+        type == "OPEN_HIHAT" ||
+        type == "OPENHIHAT")
+    {
+        return openHiHat(t);
+    }
+
+    // --------------------------------------------------------
+    // TOMS
+    // --------------------------------------------------------
+
+    if (
+        type == "LOW_TOM" ||
+        type == "LOW_MID_TOM" ||
+        type == "ELECTRONIC_TOM" ||
+        type == "SYNTH_TOM")
+    {
+        return tom(t, 95.0);
+    }
+
+    if (
+        type == "MID_TOM")
+    {
+        return tom(t, 145.0);
+    }
+
+    if (
+        type == "HIGH_MID_TOM")
+    {
+        return tom(t, 175.0);
+    }
+
+    if (
+        type == "HIGH_TOM")
+    {
+        return tom(t, 210.0);
+    }
+
+    // --------------------------------------------------------
+    // CYMBALS
+    // --------------------------------------------------------
+
+    if (
+        type == "CRASH" ||
+        type == "CRASH_2" ||
+        type == "CRASH_SHORT" ||
+        type == "CRASH_LONG" ||
+        type == "SPLASH" ||
+        type == "CHINA")
+    {
+        return crash(t);
+    }
+
+    if (
+        type == "RIDE" ||
+        type == "RIDE_2" ||
+        type == "RIDE_SHORT" ||
+        type == "RIDE_LONG" ||
+        type == "RIDE_BELL")
+    {
+        return ride(t);
+    }
+
+    // --------------------------------------------------------
+    // REVERSE CYMBALS
+    // --------------------------------------------------------
+
+    if (
+        type == "REVERSE_CRASH" ||
+        type == "REVERSE_CYMBAL")
+    {
+        double value =
+            crash(
+                std::max(
+                    0.0,
+                    2.5 - t
+                )
+            );
+
+        return value;
+    }
+
+    // --------------------------------------------------------
+    // BASIC PERCUSSION
+    // --------------------------------------------------------
+
+    if (
+        type == "COWBELL" ||
+        type == "COWBELL_LOW" ||
+        type == "COWBELL_HIGH" ||
+        type == "BELL" ||
+        type == "LOW_BELL" ||
+        type == "HIGH_BELL")
+    {
+        double frequency = 900.0;
+
+        if (
+            type == "COWBELL_LOW" ||
+            type == "LOW_BELL")
+        {
+            frequency = 600.0;
+        }
+        else if (
+            type == "COWBELL_HIGH" ||
+            type == "HIGH_BELL")
+        {
+            frequency = 1200.0;
+        }
+
+        return
+            (
+                std::sin(
+                    2.0 * PI *
+                    frequency *
+                    t
+                ) * 0.7
+                +
+                std::sin(
+                    2.0 * PI *
+                    frequency * 1.4 *
+                    t
+                ) * 0.3
+            ) *
+            std::exp(-10.0 * t);
+    }
+
+    // --------------------------------------------------------
+    // WOOD / BLOCK
+    // --------------------------------------------------------
+
+    if (
+        type == "WOODBLOCK" ||
+        type == "CLAVES" ||
+        type == "BLOCK_LOW" ||
+        type == "BLOCK_HIGH" ||
+        type == "WOOD_HIT" ||
+        type == "WOOD_CLICK")
+    {
+        double frequency = 1200.0;
+
+        if (
+            type == "BLOCK_LOW" ||
+            type == "WOOD_HIT")
+        {
+            frequency = 700.0;
+        }
+
+        if (
+            type == "BLOCK_HIGH" ||
+            type == "WOOD_CLICK")
+        {
+            frequency = 1800.0;
+        }
+
+        return
+            std::sin(
+                2.0 * PI *
+                frequency *
+                t
+            ) *
+            std::exp(-18.0 * t);
+    }
+
+    // --------------------------------------------------------
+    // SHAKERS / MARACAS / CABASA
+    // --------------------------------------------------------
+
+    if (
+        type == "SHAKER" ||
+        type == "SHAKER_LOW" ||
+        type == "SHAKER_HIGH" ||
+        type == "MARACAS" ||
+        type == "CABASA")
+    {
+        double level =
+            noise();
+
+        double decay = 14.0;
+
+        if (type == "SHAKER_HIGH")
+            decay = 20.0;
+
+        if (type == "SHAKER_LOW")
+            decay = 10.0;
+
+        return
+            level *
+            std::exp(-decay * t) *
+            0.65;
+    }
+
+    // --------------------------------------------------------
+    // TAMBOURINE
+    // --------------------------------------------------------
+
+    if (
+        type == "TAMBOURINE" ||
+        type == "TAMBOURINE_LOW" ||
+        type == "TAMBOURINE_HIGH")
+    {
+        return
+            (
+                noise() * 0.65 +
+                std::sin(
+                    2.0 * PI *
+                    7500.0 *
+                    t
+                ) * 0.20
+            ) *
+            std::exp(-12.0 * t);
+    }
+
+    // --------------------------------------------------------
+    // AGOGO
+    // --------------------------------------------------------
+
+    if (
+        type == "AGOGO_LOW" ||
+        type == "AGOGO_HIGH")
+    {
+        double frequency =
+            type == "AGOGO_LOW"
+            ? 700.0
+            : 1100.0;
+
+        return
+            (
+                std::sin(
+                    2.0 * PI *
+                    frequency *
+                    t
+                ) +
+                std::sin(
+                    2.0 * PI *
+                    frequency * 2.0 *
+                    t
+                ) * 0.35
+            ) *
+            std::exp(-7.0 * t);
+    }
+
+    // --------------------------------------------------------
+    // CONGAS
+    // --------------------------------------------------------
+
+    if (
+        type == "CONGA_LOW" ||
+        type == "MUTE_CONGA")
+    {
+        return tom(t, 100.0);
+    }
+
+    if (
+        type == "CONGA_MID" ||
+        type == "OPEN_CONGA")
+    {
+        return tom(t, 180.0);
+    }
+
+    if (type == "CONGA_HIGH")
+    {
+        return tom(t, 260.0);
+    }
+
+    // --------------------------------------------------------
+    // BONGOS
+    // --------------------------------------------------------
+
+    if (type == "BONGO_LOW")
+        return tom(t, 180.0);
+
+    if (type == "BONGO_HIGH")
+        return tom(t, 300.0);
+
+    // --------------------------------------------------------
+    // TIMBALES
+    // --------------------------------------------------------
+
+    if (type == "TIMBALE_LOW")
+        return tom(t, 220.0);
+
+    if (type == "TIMBALE_HIGH")
+        return tom(t, 360.0);
+
+    // --------------------------------------------------------
+    // DJEMBE
+    // --------------------------------------------------------
+
+    if (type == "DJEMBE_LOW")
+        return tom(t, 110.0);
+
+    if (type == "DJEMBE_MID")
+        return tom(t, 180.0);
+
+    if (type == "DJEMBE_HIGH")
+        return tom(t, 260.0);
+
+    // --------------------------------------------------------
+    // TABLA
+    // --------------------------------------------------------
+
+    if (type == "TABLA_LOW")
+        return tom(t, 180.0);
+
+    if (type == "TABLA_HIGH")
+        return tom(t, 330.0);
+
+    // --------------------------------------------------------
+    // CUICA
+    // --------------------------------------------------------
+
+    if (
+        type == "CUICA_LOW" ||
+        type == "CUICA_HIGH")
+    {
+        double frequency =
+            type == "CUICA_LOW"
+            ? 350.0
+            : 650.0;
+
+        return
+            std::sin(
+                2.0 * PI *
+                frequency *
+                t
+            ) *
+            std::exp(-7.0 * t);
+    }
+
+    // --------------------------------------------------------
+    // TRIANGLE
+    // --------------------------------------------------------
+
+    if (
+        type == "TRIANGLE" ||
+        type == "TRIANGLE_OPEN" ||
+        type == "TRIANGLE_MUTE")
+    {
+        double frequency = 4200.0;
+
+        if (type == "TRIANGLE_MUTE")
+            frequency = 3200.0;
+
+        return
+            std::sin(
+                2.0 * PI *
+                frequency *
+                t
+            ) *
+            std::exp(-9.0 * t) *
+            0.45;
+    }
+
+    // --------------------------------------------------------
+    // GONG / TAM TAM
+    // --------------------------------------------------------
+
+    if (
+        type == "GONG" ||
+        type == "TAM_TAM")
+    {
+        return
+            (
+                std::sin(
+                    2.0 * PI *
+                    180.0 *
+                    t
+                ) +
+                std::sin(
+                    2.0 * PI *
+                    270.0 *
+                    t
+                ) * 0.5
+            ) *
+            std::exp(-1.5 * t) *
+            0.75;
+    }
+
+    // --------------------------------------------------------
+    // HAND DRUM
+    // --------------------------------------------------------
+
+    if (type == "HAND_DRUM")
+        return tom(t, 160.0);
+
+    // --------------------------------------------------------
+    // FINGER SNAP
+    // --------------------------------------------------------
+
+    if (type == "FINGER_SNAP")
+    {
+        return
+            noise() *
+            std::exp(-45.0 * t);
+    }
+
+    // --------------------------------------------------------
+    // NOISE / EFFECTS
+    // --------------------------------------------------------
+
+    if (
+        type == "NOISE_HIT" ||
+        type == "NOISE_BURST" ||
+        type == "CLICK" ||
+        type == "POP" ||
+        type == "DROP" ||
+        type == "IMPACT" ||
+        type == "IMPACT_LOW" ||
+        type == "IMPACT_HIGH")
+    {
+        double frequency = 1000.0;
+
+        if (type == "IMPACT_LOW")
+            frequency = 120.0;
+
+        if (type == "IMPACT_HIGH")
+            frequency = 1800.0;
+
+        return
+            (
+                noise() * 0.65 +
+                std::sin(
+                    2.0 * PI *
+                    frequency *
+                    t
+                ) * 0.35
+            ) *
+            std::exp(-8.0 * t);
+    }
+
+    // --------------------------------------------------------
+    // METAL
+    // --------------------------------------------------------
+
+    if (
+        type == "METAL_HIT" ||
+        type == "METAL_CLANK" ||
+        type == "METAL_SCRAPE")
+    {
+        return
+            (
+                noise() * 0.7 +
+                std::sin(
+                    2.0 * PI *
+                    4200.0 *
+                    t
+                ) * 0.3
+            ) *
+            std::exp(-5.0 * t);
+    }
+
+    // --------------------------------------------------------
+    // CASTANETS
+    // --------------------------------------------------------
+
+    if (type == "CASTANETS")
+    {
+        return
+            noise() *
+            std::exp(-55.0 * t);
+    }
+
+    // --------------------------------------------------------
+    // WHISTLE
+    // --------------------------------------------------------
+
+    if (
+        type == "WHISTLE_LOW" ||
+        type == "WHISTLE_HIGH")
+    {
+        double frequency =
+            type == "WHISTLE_LOW"
+            ? 900.0
+            : 1800.0;
+
+        return
+            std::sin(
+                2.0 * PI *
+                frequency *
+                t
+            ) *
+            std::exp(-3.0 * t);
+    }
+
+    // --------------------------------------------------------
+    // BREATH
+    // --------------------------------------------------------
+
+    if (type == "BREATH")
+    {
+        return
+            noise() *
+            std::exp(-4.0 * t) *
+            0.45;
+    }
+
+    // --------------------------------------------------------
+    // FOOTSTEP
+    // --------------------------------------------------------
+
+    if (type == "FOOTSTEP")
+    {
+        return
+            (
+                noise() * 0.5 +
+                std::sin(
+                    2.0 * PI *
+                    90.0 *
+                    t
+                ) * 0.5
+            ) *
+            std::exp(-12.0 * t);
+    }
+
+    // --------------------------------------------------------
+    // HEARTBEAT
+    // --------------------------------------------------------
+
+    if (type == "HEARTBEAT")
+    {
+        double pulse1 =
+            std::sin(
+                2.0 * PI *
+                65.0 *
+                t
+            ) *
+            std::exp(-18.0 * t);
+
+        double pulse2 =
+            std::sin(
+                2.0 * PI *
+                50.0 *
+                std::max(
+                    0.0,
+                    t - 0.12
+                )
+            ) *
+            std::exp(
+                -18.0 *
+                std::max(
+                    0.0,
+                    t - 0.12
+                )
+            );
+
+        return
+            pulse1 +
+            pulse2 * 0.7;
+    }
+
+    // --------------------------------------------------------
+    // LASER
+    // --------------------------------------------------------
+
+    if (
+        type == "LASER_HIT" ||
+        type == "LASER_LOW" ||
+        type == "LASER_HIGH")
+    {
+        double frequency = 900.0;
+
+        if (type == "LASER_LOW")
+            frequency = 300.0;
+
+        if (type == "LASER_HIGH")
+            frequency = 1800.0;
+
+        return
+            std::sin(
+                2.0 * PI *
+                frequency *
+                t
+            ) *
+            std::exp(-6.0 * t);
+    }
+
+    // --------------------------------------------------------
+    // EXPLOSION
+    // --------------------------------------------------------
+
+    if (type == "EXPLOSION")
+    {
+        return
+            (
+                noise() * 0.8 +
+                std::sin(
+                    2.0 * PI *
+                    70.0 *
+                    t
+                ) * 0.4
+            ) *
+            std::exp(-2.5 * t);
+    }
+
+    // --------------------------------------------------------
+    // TAIKO / TIMPANI / LARGE DRUMS
+    // --------------------------------------------------------
+
+    if (
+        type == "TIMPANI" ||
+        type == "TAIKO" ||
+        type == "GRANDE_CASSA")
+    {
+        return tom(t, 65.0);
+    }
+
+    // --------------------------------------------------------
+    // ORCHESTRA HIT
+    // --------------------------------------------------------
+
+    if (type == "ORCHESTRA_HIT")
+    {
+        return
+            (
+                snare(t) * 0.3 +
+                tom(t, 180.0) * 0.6
+            );
+    }
+
+    // --------------------------------------------------------
+    // UNKNOWN DRUM
+    // --------------------------------------------------------
+
+    return 0.0;
+}
+
+// ============================================================
+// LOAD SONG TEXT
+// ============================================================
+
+bool LoadSongText(
+    const std::string& text,
+    std::vector<NoteEvent>& notes,
+    std::vector<DrumEvent>& drums,
+    double& tempo,
+    double& loopLengthBeats)
+{
+    notes.clear();
+    drums.clear();
+
+    tempo = 120.0;
+    loopLengthBeats = 4.0;
+
+    std::vector<std::string> instruments =
+        GetInstruments();
+
+    // --------------------------------------------------------
+    // Sort longest names first.
+    //
+    // This prevents a shorter name from matching before a
+    // longer instrument name.
+    // --------------------------------------------------------
+
+    std::sort(
+        instruments.begin(),
+        instruments.end(),
+        [](const std::string& a,
+           const std::string& b)
+        {
+            return a.length() > b.length();
+        }
+    );
+
+    std::istringstream input(text);
+    std::string line;
+
+    while (std::getline(input, line))
+    {
+        if (line.empty())
+            continue;
+
+        // ----------------------------------------------------
+        // Remove Windows CR if present.
+        // ----------------------------------------------------
+
+        if (!line.empty() &&
+            line.back() == '\r')
+        {
+            line.pop_back();
+        }
+
+        std::istringstream lineStream(line);
+
+        std::string firstWord;
+        lineStream >> firstWord;
+
+        if (firstWord.empty())
+            continue;
+
+        std::string command =
+            upper(firstWord);
+
+        // ----------------------------------------------------
+        // TEMPO
+        // ----------------------------------------------------
+
+        if (command == "TEMPO")
+        {
+            lineStream >> tempo;
+
+            tempo =
+                std::max(
+                    MIN_TEMPO,
+                    std::min(
+                        MAX_TEMPO,
+                        tempo
+                    )
+                );
+
+            continue;
+        }
+
+        // ----------------------------------------------------
+        // LENGTH
+        // ----------------------------------------------------
+
+        if (command == "LENGTH")
+        {
+            lineStream >> loopLengthBeats;
+
+            if (loopLengthBeats <= 0)
+                loopLengthBeats = 4.0;
+
+            continue;
+        }
+
+        // ----------------------------------------------------
+        // TRACK
+        // ----------------------------------------------------
+
+        if (command == "TRACK")
+            continue;
+
+        // ----------------------------------------------------
+        // DRUM
+        // ----------------------------------------------------
+
+        if (command == "DRUM")
+        {
+            std::string type;
+            double startBeat = 0.0;
+
+            lineStream
+                >> type
+                >> startBeat;
+
+            if (!type.empty())
+            {
+                drums.push_back(
+                    {
+                        startBeat,
+                        upper(type)
+                    }
+                );
+            }
+
+            continue;
+        }
+
+        // ----------------------------------------------------
+        // NOTE
+        // ----------------------------------------------------
+
+        if (command == "NOTE")
+        {
+            std::string noteName;
+            double startBeat = 0.0;
+            double durationBeats = 1.0;
+
+            lineStream
+                >> noteName
+                >> startBeat
+                >> durationBeats;
+
+            double frequency =
+                noteFrequency(
+                    upper(noteName)
+                );
+
+            if (frequency > 0.0)
+            {
+                notes.push_back(
+                    {
+                        startBeat,
+                        durationBeats,
+                        frequency,
+                        "PIANO"
+                    }
+                );
+            }
+
+            continue;
+        }
+
+        // ----------------------------------------------------
+        // INSTRUMENT
+        //
+        // Examples:
+        //
+        // PIANO C4 0 1
+        // ELECTRIC GRAND PIANO C4 0 1
+        // ACOUSTIC GUITAR STEEL G4 2 1
+        //
+        // We match the complete instrument name at the
+        // beginning of the line.
+        // ----------------------------------------------------
+
+        std::string upperLine =
+            upper(line);
+
+        std::string matchedInstrument;
+        size_t instrumentEnd = 0;
+
+        for (
+            const std::string& instrument :
+            instruments)
+        {
+            std::string upperInstrument =
+                upper(instrument);
+
+            if (upperLine.length() <
+                upperInstrument.length())
+            {
+                continue;
+            }
+
+            if (
+                upperLine.compare(
+                    0,
+                    upperInstrument.length(),
+                    upperInstrument
+                ) != 0)
+            {
+                continue;
+            }
+
+            // Make sure the instrument name ends at
+            // a word boundary.
+            //
+            // Example:
+            //
+            // PIANO C4 0 1
+            //
+            // should match PIANO.
+            //
+            // But:
+            //
+            // PIANOXYZ C4 0 1
+            //
+            // should NOT match PIANO.
+
+            size_t next =
+                upperInstrument.length();
+
+            if (
+                next < upperLine.length() &&
+                !std::isspace(
+                    static_cast<unsigned char>(
+                        upperLine[next]
+                    )
+                )
+            )
+            {
+                continue;
+            }
+
+            matchedInstrument =
+                instrument;
+
+            instrumentEnd =
+                next;
+
+            break;
+        }
+
+        // ----------------------------------------------------
+        // No valid instrument found.
+        // ----------------------------------------------------
+
+        if (matchedInstrument.empty())
+            continue;
+
+        // ----------------------------------------------------
+        // Everything after the instrument name is:
+        //
+        // NOTE START DURATION
+        // ----------------------------------------------------
+
+        std::string remainder =
+            line.substr(
+                instrumentEnd
+            );
+
+        std::istringstream noteStream(
+            remainder
+        );
+
+        std::string noteName;
+        double startBeat = 0.0;
+        double durationBeats = 1.0;
+
+        noteStream
+            >> noteName
+            >> startBeat
+            >> durationBeats;
+
+        if (noteName.empty())
+            continue;
+
+        double frequency =
+            noteFrequency(
+                upper(noteName)
+            );
+
+        if (frequency <= 0.0)
+            continue;
+
+        notes.push_back(
+            {
+                startBeat,
+                durationBeats,
+                frequency,
+                matchedInstrument
+            }
+        );
+    }
+
+    return true;
+}
+
+// ============================================================
+// EDITOR TEXT
+// ============================================================
+
+std::string GetEditorText()
+{
+    if (!songEditor)
+        return "";
+
+    int length =
+        GetWindowTextLengthA(songEditor);
+
+    if (length <= 0)
+        return "";
+
+    std::string text(
+        length + 1,
+        '\0'
+    );
+
+    int actualLength =
+        GetWindowTextA(
+            songEditor,
+            &text[0],
+            length + 1
+        );
+
+    text.resize(actualLength);
+
+    return text;
+}
+
+void SetEditorText(
+    const std::string& text)
+{
+    if (!songEditor)
+        return;
+
+    SetWindowTextA(
+        songEditor,
+        text.c_str()
+    );
+}
+
+void InsertEditorText(
+    const std::string& text)
+{
+    if (!songEditor)
+        return;
+
+    SendMessageA(
+        songEditor,
+        EM_REPLACESEL,
+        TRUE,
+        reinterpret_cast<LPARAM>(
+            text.c_str()
+        )
+    );
+}
+
+// ============================================================
+// VOLUME
+// ============================================================
+
+double GetVolumeMultiplier(int level)
+{
+    switch (level)
+    {
+        case 1: return 2.0;
+        case 2: return 3.5;
+        case 3: return 5.0;
+        default: return 1.0;
+    }
+}
+
+// ============================================================
+// GENERATE AUDIO
+// ============================================================
+
+bool GenerateAudio(
+    const std::string& text,
+    double tempoOverride,
+    int pitchSemitones,
+    double volumeMultiplier,
+    std::vector<short>& samples)
+{
+    std::vector<NoteEvent> notes;
+    std::vector<DrumEvent> drums;
+
+    double fileTempo;
+    double loopLengthBeats;
+
+    if (!LoadSongText(
+        text,
+        notes,
+        drums,
+        fileTempo,
+        loopLengthBeats))
+    {
+        return false;
+    }
+
+    double tempo =
+        std::max(
+            MIN_TEMPO,
+            std::min(MAX_TEMPO, tempoOverride)
+        );
+
+    int pitch =
+        std::max(
+            MIN_PITCH,
+            std::min(MAX_PITCH, pitchSemitones)
+        );
+
+    double pitchMultiplier =
+        std::pow(
+            2.0,
+            static_cast<double>(pitch) / 12.0
+        );
+
+    double secondsPerBeat =
+        60.0 / tempo;
+
+    double loopDuration =
+        loopLengthBeats *
+        secondsPerBeat;
+
+    int totalSamples =
+        static_cast<int>(
+            std::round(
+                loopDuration *
+                SAMPLE_RATE
+            )
+        );
+
+    if (totalSamples <= 0)
+        return false;
+
+    std::vector<double> audio(
+        totalSamples,
+        0.0
+    );
+
+    // --------------------------------------------------------
+    // NOTES
+    // --------------------------------------------------------
+
+    for (const NoteEvent& note : notes)
+    {
+        double startSeconds =
+            note.startBeat *
+            secondsPerBeat;
+
+        double durationSeconds =
+            note.durationBeats *
+            secondsPerBeat;
+
+        int startSample =
+            static_cast<int>(
+                std::round(
+                    startSeconds *
+                    SAMPLE_RATE
+                )
+            );
+
+        int noteSamples =
+            static_cast<int>(
+                std::round(
+                    durationSeconds *
+                    SAMPLE_RATE
+                )
+            );
+
+        double shiftedFrequency =
+            note.frequency *
+            pitchMultiplier;
+
+        for (int i = 0;
+             i < noteSamples;
+             ++i)
+        {
+            int index =
+                startSample + i;
+
+            if (index < 0)
+                continue;
+
+            if (index >= totalSamples)
+                break;
+
+            double time =
+                static_cast<double>(i) /
+                SAMPLE_RATE;
+
+            double envelope = 1.0;
+
+            if (time < 0.01)
+                envelope =
+                    time / 0.01;
+
+            double remaining =
+                durationSeconds - time;
+
+            if (remaining < 0.05)
+            {
+                envelope =
+                    std::min(
+                        envelope,
+                        std::max(
+                            0.0,
+                            remaining / 0.05
+                        )
+                    );
+            }
+
+            audio[index] +=
+                instrumentWave(
+                    note.instrument,
+                    shiftedFrequency,
+                    time
+                ) *
+                envelope *
+                0.55;
+        }
+    }
+
+    // --------------------------------------------------------
+    // DRUMS
+    // --------------------------------------------------------
+
+    for (const DrumEvent& drum : drums)
+    {
+        double startSeconds =
+            drum.startBeat *
+            secondsPerBeat;
+
+        int startSample =
+            static_cast<int>(
+                std::round(
+                    startSeconds *
+                    SAMPLE_RATE
+                )
+            );
+
+        int drumSamples =
+            static_cast<int>(
+                2.5 *
+                SAMPLE_RATE
+            );
+
+        for (int i = 0;
+             i < drumSamples;
+             ++i)
+        {
+            int index =
+                startSample + i;
+
+            if (index < 0)
+                continue;
+
+            if (index >= totalSamples)
+                break;
+
+            double time =
+                static_cast<double>(i) /
+                SAMPLE_RATE;
+
+            double drumVolume = 1.0;
+
+            if (
+                drum.type == "KICK" ||
+                drum.type == "BASS_DRUM")
+                drumVolume = 2.25;
+            else if (drum.type == "SNARE")
+                drumVolume = 1.70;
+            else if (
+                drum.type == "HIHAT" ||
+                drum.type == "CLOSED_HIHAT")
+                drumVolume = 0.85;
+            else if (drum.type == "OPEN_HIHAT")
+                drumVolume = 0.95;
+            else if (
+                drum.type == "LOW_TOM" ||
+                drum.type == "MID_TOM" ||
+                drum.type == "HIGH_TOM")
+                drumVolume = 1.15;
+            else if (drum.type == "CRASH")
+                drumVolume = 1.05;
+            else if (drum.type == "RIDE")
+                drumVolume = 0.85;
+            else if (drum.type == "RIMSHOT")
+                drumVolume = 0.90;
+
+            audio[index] +=
+                makeDrum(
+                    drum.type,
+                    time
+                ) *
+                drumVolume;
+        }
+    }
+
+   // --------------------------------------------------------
+// MASTER
+// --------------------------------------------------------
+
+if (volumeMultiplier < 1.0)
+    volumeMultiplier = 1.0;
+
+samples.resize(totalSamples);
+
+for (int i = 0;
+     i < totalSamples;
+     ++i)
+{
+    double value =
+        audio[i] *
+        MASTER_VOLUME *
+        volumeMultiplier;
+
+    value =
+        std::tanh(value);
+
+    samples[i] =
+        static_cast<short>(
+            value * 32767.0
+        );
+}
+
+return true;
+}
+
+// ============================================================
+// WAV WRITER
+// ============================================================
+
+bool SaveWavFile(
+    const std::string& filename,
+    const std::vector<short>& samples)
+{
+    std::ofstream file(
+        filename,
+        std::ios::binary
+    );
+
+    if (!file)
+        return false;
+
+    const uint32_t dataSize =
+        static_cast<uint32_t>(
+            samples.size() *
+            sizeof(short)
+        );
+
+    const uint32_t fmtSize = 16;
+    const uint16_t audioFormat = 1;
+    const uint16_t channels = 1;
+    const uint32_t sampleRate = SAMPLE_RATE;
+    const uint16_t bitsPerSample = 16;
+
+    const uint16_t blockAlign =
+        channels *
+        bitsPerSample /
+        8;
+
+    const uint32_t byteRate =
+        sampleRate *
+        blockAlign;
+
+    const uint32_t riffSize =
+        4 +
+        8 + fmtSize +
+        8 + dataSize;
+
+    file.write(
+        "RIFF",
+        4
+    );
+
+    file.write(
+        reinterpret_cast<const char*>(
+            &riffSize
+        ),
+        sizeof(riffSize)
+    );
+
+    file.write(
+        "WAVE",
+        4
+    );
+
+    file.write(
+        "fmt ",
+        4
+    );
+
+    file.write(
+        reinterpret_cast<const char*>(
+            &fmtSize
+        ),
+        sizeof(fmtSize)
+    );
+
+    file.write(
+        reinterpret_cast<const char*>(
+            &audioFormat
+        ),
+        sizeof(audioFormat)
+    );
+
+    file.write(
+        reinterpret_cast<const char*>(
+            &channels
+        ),
+        sizeof(channels)
+    );
+
+    file.write(
+        reinterpret_cast<const char*>(
+            &sampleRate
+        ),
+        sizeof(sampleRate)
+    );
+
+    file.write(
+        reinterpret_cast<const char*>(
+            &byteRate
+        ),
+        sizeof(byteRate)
+    );
+
+    file.write(
+        reinterpret_cast<const char*>(
+            &blockAlign
+        ),
+        sizeof(blockAlign)
+    );
+
+    file.write(
+        reinterpret_cast<const char*>(
+            &bitsPerSample
+        ),
+        sizeof(bitsPerSample)
+    );
+
+    file.write(
+        "data",
+        4
+    );
+
+    file.write(
+        reinterpret_cast<const char*>(
+            &dataSize
+        ),
+        sizeof(dataSize)
+    );
+
+    if (dataSize > 0)
+    {
+        file.write(
+            reinterpret_cast<const char*>(
+                samples.data()
+            ),
+            dataSize
+        );
+    }
+
+    return file.good();
+}
+
+// ============================================================
+// TEMPORARY WAV FILE
+// ============================================================
+
+std::string MakeTemporaryWav()
+{
+    char tempPath[MAX_PATH] = {};
+
+    DWORD pathLength =
+        GetTempPathA(
+            MAX_PATH,
+            tempPath
+        );
+
+    if (pathLength == 0 ||
+        pathLength >= MAX_PATH)
+    {
+        return "";
+    }
+
+    char tempFile[MAX_PATH] = {};
+
+    if (GetTempFileNameA(
+        tempPath,
+        "MTE",
+        0,
+        tempFile) == 0)
+    {
+        return "";
+    }
+
+    // GetTempFileNameA creates a .tmp file.
+    // Delete that file and use the same unique name
+    // with a .wav extension instead.
+
+    DeleteFileA(tempFile);
+
+    std::string filename = tempFile;
+
+    size_t dot =
+        filename.find_last_of('.');
+
+    if (dot != std::string::npos)
+    {
+        filename =
+            filename.substr(0, dot);
+    }
+
+    filename += ".wav";
+
+    return filename;
+}
+// ============================================================
+// SHELL QUOTE
+// ============================================================
+
+std::string QuoteArgument(
+    const std::string& value)
+{
+    std::string result = "\"";
+
+    for (char c : value)
+    {
+        if (c == '"')
+            result += "\\\"";
+        else
+            result += c;
+    }
+
+    result += "\"";
+
+    return result;
+}
+
+// ============================================================
+// RUN FFMPEG
+// ============================================================
+bool RunFFmpeg(
+    const std::string& arguments)
+{
+    std::string command =
+        QuoteArgument(FFMPEG_PATH) +
+        " " +
+        arguments;
+
+    MessageBoxA(
+        mainWindow,
+        command.c_str(),
+        "FFmpeg Command",
+        MB_OK | MB_ICONINFORMATION
+    );
+
+    STARTUPINFOA startupInfo = {};
+    PROCESS_INFORMATION processInfo = {};
+
+    startupInfo.cb = sizeof(startupInfo);
+
+    std::vector<char> commandLine(
+        command.begin(),
+        command.end()
+    );
+
+    commandLine.push_back('\0');
+
+    BOOL created =
+        CreateProcessA(
+            nullptr,
+            commandLine.data(),
+            nullptr,
+            nullptr,
+            FALSE,
+            0,
+            nullptr,
+            nullptr,
+            &startupInfo,
+            &processInfo
+        );
+
+    if (!created)
+    {
+        DWORD error = GetLastError();
+
+        std::string message =
+            "CreateProcess failed.\r\n\r\nError code: " +
+            std::to_string(error);
+
+        MessageBoxA(
+            mainWindow,
+            message.c_str(),
+            "FFmpeg Error",
+            MB_OK | MB_ICONERROR
+        );
+
+        return false;
+    }
+
+    WaitForSingleObject(
+        processInfo.hProcess,
+        INFINITE
+    );
+
+    DWORD exitCode = 1;
+
+    GetExitCodeProcess(
+        processInfo.hProcess,
+        &exitCode
+    );
+
+    CloseHandle(processInfo.hProcess);
+    CloseHandle(processInfo.hThread);
+
+    if (exitCode != 0)
+    {
+        std::string message =
+            "FFmpeg exited with error code " +
+            std::to_string(exitCode) +
+            "\r\n\r\nCommand:\r\n" +
+            command;
+
+        MessageBoxA(
+            mainWindow,
+            message.c_str(),
+            "FFmpeg Error",
+            MB_OK | MB_ICONERROR
+        );
+
+        return false;
+    }
+
+    return true;
+}
+// ============================================================
+// CHECK FFMPEG
+// ============================================================
+
+bool CheckFFmpeg()
+{
+    STARTUPINFOA startupInfo = {};
+    PROCESS_INFORMATION processInfo = {};
+
+    startupInfo.cb =
+        sizeof(startupInfo);
+
+    std::string command =
+        QuoteArgument(
+            FFMPEG_PATH
+        ) +
+        " -version";
+
+    std::vector<char> commandLine(
+        command.begin(),
+        command.end()
+    );
+
+    commandLine.push_back('\0');
+
+    BOOL created =
+        CreateProcessA(
+            nullptr,
+            commandLine.data(),
+            nullptr,
+            nullptr,
+            FALSE,
+            CREATE_NO_WINDOW,
+            nullptr,
+            nullptr,
+            &startupInfo,
+            &processInfo
+        );
+
+    if (!created)
+        return false;
+
+    WaitForSingleObject(
+        processInfo.hProcess,
+        5000
+    );
+
+    DWORD exitCode = 1;
+
+    GetExitCodeProcess(
+        processInfo.hProcess,
+        &exitCode
+    );
+
+    CloseHandle(
+        processInfo.hProcess
+    );
+
+    CloseHandle(
+        processInfo.hThread
+    );
+
+    return exitCode == 0;
+}
+
+// ============================================================
+// EXPORT WAV
+// ============================================================
+
+void ExportCurrentTrackWav()
+{
+    std::string text =
+        GetEditorText();
+
+    if (text.empty())
+    {
+        MessageBoxA(
+            mainWindow,
+            "The editor is empty.",
+            "EXPORT WAV",
+            MB_OK | MB_ICONINFORMATION
+        );
+
+        return;
+    }
+
+    std::vector<short> samples;
+
+    if (!GenerateAudio(
+        text,
+        currentTempo.load(),
+        currentPitch.load(),
+        GetVolumeMultiplier(
+            volumeBoost.load()
+        ),
+        samples))
+    {
+        MessageBoxA(
+            mainWindow,
+            "Could not generate audio.",
+            "EXPORT WAV",
+            MB_OK | MB_ICONERROR
+        );
+
+        return;
+    }
+
+    char filename[MAX_PATH] =
+        "track.wav";
+
+    OPENFILENAMEA dialog = {};
+
+    dialog.lStructSize =
+        sizeof(OPENFILENAMEA);
+
+    dialog.hwndOwner =
+        mainWindow;
+
+    dialog.lpstrFilter =
+        "WAV Audio (*.wav)\0*.wav\0"
+        "All Files (*.*)\0*.*\0";
+
+    dialog.lpstrFile =
+        filename;
+
+    dialog.nMaxFile =
+        MAX_PATH;
+
+    dialog.Flags =
+        OFN_OVERWRITEPROMPT |
+        OFN_PATHMUSTEXIST;
+
+    dialog.lpstrDefExt =
+        "wav";
+
+    if (!GetSaveFileNameA(&dialog))
+        return;
+
+    if (!SaveWavFile(
+        filename,
+        samples))
+    {
+        MessageBoxA(
+            mainWindow,
+            "Could not save the WAV file.",
+            "EXPORT WAV",
+            MB_OK | MB_ICONERROR
+        );
+
+        return;
+    }
+
+    MessageBoxA(
+        mainWindow,
+        "WAV exported successfully.",
+        "EXPORT WAV",
+        MB_OK | MB_ICONINFORMATION
+    );
+}
+
+// ============================================================
+// EXPORT MP3
+// ============================================================
+
+void ExportCurrentTrackMp3()
+{
+    std::string text =
+        GetEditorText();
+
+    if (text.empty())
+    {
+        MessageBoxA(
+            mainWindow,
+            "The editor is empty.",
+            "EXPORT MP3",
+            MB_OK | MB_ICONINFORMATION
+        );
+
+        return;
+    }
+
+    if (!CheckFFmpeg())
+    {
+        MessageBoxA(
+            mainWindow,
+            "FFmpeg could not be found.\r\n\r\n"
+            "Put ffmpeg.exe beside this program "
+            "or update FFMPEG_PATH in the source code.",
+            "EXPORT MP3",
+            MB_OK | MB_ICONERROR
+        );
+
+        return;
+    }
+
+    std::vector<short> samples;
+
+    if (!GenerateAudio(
+        text,
+        currentTempo.load(),
+        currentPitch.load(),
+        GetVolumeMultiplier(
+            volumeBoost.load()
+        ),
+        samples))
+    {
+        MessageBoxA(
+            mainWindow,
+            "Could not generate audio.",
+            "EXPORT MP3",
+            MB_OK | MB_ICONERROR
+        );
+
+        return;
+    }
+
+    std::string temporaryWav =
+        MakeTemporaryWav();
+
+    if (temporaryWav.empty() ||
+        !SaveWavFile(
+            temporaryWav,
+            samples))
+    {
+        MessageBoxA(
+            mainWindow,
+            "Could not create temporary WAV audio.",
+            "EXPORT MP3",
+            MB_OK | MB_ICONERROR
+        );
+
+        return;
+    }
+
+    char filename[MAX_PATH] =
+        "track.mp3";
+
+    OPENFILENAMEA dialog = {};
+
+    dialog.lStructSize =
+        sizeof(OPENFILENAMEA);
+
+    dialog.hwndOwner =
+        mainWindow;
+
+    dialog.lpstrFilter =
+        "MP3 Audio (*.mp3)\0*.mp3\0"
+        "All Files (*.*)\0*.*\0";
+
+    dialog.lpstrFile =
+        filename;
+
+    dialog.nMaxFile =
+        MAX_PATH;
+
+    dialog.Flags =
+        OFN_OVERWRITEPROMPT |
+        OFN_PATHMUSTEXIST;
+
+    dialog.lpstrDefExt =
+        "mp3";
+
+    if (!GetSaveFileNameA(&dialog))
+    {
+        DeleteFileA(
+            temporaryWav.c_str()
+        );
+
+        return;
+    }
+
+    std::string args =
+    "-y -i " +
+    QuoteArgument(
+        temporaryWav
+    ) +
+    " -codec:a libmp3lame "
+    "-b:a 320k " +
+    QuoteArgument(
+        filename
+    );
+
+bool success =
+    RunFFmpeg(args);
+
+    DeleteFileA(
+        temporaryWav.c_str()
+    );
+
+    if (!success)
+    {
+        MessageBoxA(
+            mainWindow,
+            "FFmpeg could not create the MP3.",
+            "EXPORT MP3",
+            MB_OK | MB_ICONERROR
+        );
+
+        return;
+    }
+
+    MessageBoxA(
+        mainWindow,
+        "MP3 exported successfully.",
+        "EXPORT MP3",
+        MB_OK | MB_ICONINFORMATION
+    );
+}
+
+// ============================================================
+// END OF PART 1
+// ============================================================
+// ============================================================
+// EXPORT YOUTUBE MP4
+// ============================================================
+
+void ExportCurrentTrackMp4()
+{
+    std::string text =
+        GetEditorText();
+
+    if (text.empty())
+    {
+        MessageBoxA(
+            mainWindow,
+            "The editor is empty.",
+            "EXPORT YOUTUBE MP4",
+            MB_OK | MB_ICONINFORMATION
+        );
+
+        return;
+    }
+
+    if (!CheckFFmpeg())
+    {
+        MessageBoxA(
+            mainWindow,
+            "FFmpeg could not be found.\r\n\r\n"
+            "Put ffmpeg.exe beside this program "
+            "or update FFMPEG_PATH in the source code.",
+            "EXPORT YOUTUBE MP4",
+            MB_OK | MB_ICONERROR
+        );
+
+        return;
+    }
+
+    // --------------------------------------------------------
+    // Select artwork.
+    // --------------------------------------------------------
+
+    char imageFilename[MAX_PATH] = "";
+
+    OPENFILENAMEA imageDialog = {};
+
+    imageDialog.lStructSize =
+        sizeof(OPENFILENAMEA);
+
+    imageDialog.hwndOwner =
+        mainWindow;
+
+    imageDialog.lpstrFilter =
+        "Image Files (*.jpg;*.jpeg;*.png)\0"
+        "*.jpg;*.jpeg;*.png\0"
+        "JPEG Files (*.jpg;*.jpeg)\0"
+        "*.jpg;*.jpeg\0"
+        "PNG Files (*.png)\0"
+        "*.png\0"
+        "All Files (*.*)\0"
+        "*.*\0";
+
+    imageDialog.lpstrFile =
+        imageFilename;
+
+    imageDialog.nMaxFile =
+        MAX_PATH;
+
+    imageDialog.Flags =
+        OFN_FILEMUSTEXIST |
+        OFN_PATHMUSTEXIST;
+
+    if (!GetOpenFileNameA(
+        &imageDialog))
+        return;
+
+    // --------------------------------------------------------
+    // Generate audio.
+    // --------------------------------------------------------
+
+    std::vector<short> samples;
+
+    if (!GenerateAudio(
+        text,
+        currentTempo.load(),
+        currentPitch.load(),
+        GetVolumeMultiplier(
+            volumeBoost.load()
+        ),
+        samples))
+    {
+        MessageBoxA(
+            mainWindow,
+            "Could not generate audio.",
+            "EXPORT YOUTUBE MP4",
+            MB_OK | MB_ICONERROR
+        );
+
+        return;
+    }
+
+    if (samples.empty())
+    {
+        MessageBoxA(
+            mainWindow,
+            "The generated audio is empty.",
+            "EXPORT YOUTUBE MP4",
+            MB_OK | MB_ICONERROR
+        );
+
+        return;
+    }
+
+    // --------------------------------------------------------
+    // Write temporary WAV.
+    // --------------------------------------------------------
+
+    std::string temporaryWav =
+        MakeTemporaryWav();
+
+    if (temporaryWav.empty() ||
+        !SaveWavFile(
+            temporaryWav,
+            samples))
+    {
+        MessageBoxA(
+            mainWindow,
+            "Could not create temporary WAV audio.",
+            "EXPORT YOUTUBE MP4",
+            MB_OK | MB_ICONERROR
+        );
+
+        return;
+    }
+
+    // --------------------------------------------------------
+    // Choose MP4 destination.
+    // --------------------------------------------------------
+
+    char outputFilename[MAX_PATH] =
+        "youtube_track.mp4";
+
+    OPENFILENAMEA outputDialog = {};
+
+    outputDialog.lStructSize =
+        sizeof(OPENFILENAMEA);
+
+    outputDialog.hwndOwner =
+        mainWindow;
+
+    outputDialog.lpstrFilter =
+        "MP4 Video (*.mp4)\0*.mp4\0"
+        "All Files (*.*)\0*.*\0";
+
+    outputDialog.lpstrFile =
+        outputFilename;
+
+    outputDialog.nMaxFile =
+        MAX_PATH;
+
+    outputDialog.Flags =
+        OFN_OVERWRITEPROMPT |
+        OFN_PATHMUSTEXIST;
+
+    outputDialog.lpstrDefExt =
+        "mp4";
+
+    if (!GetSaveFileNameA(
+        &outputDialog))
+    {
+        DeleteFileA(
+            temporaryWav.c_str()
+        );
+
+        return;
+    }
+
+    // --------------------------------------------------------
+    // Create YouTube MP4.
+    //
+    // 1920x1080 video
+    // H.264 video
+    // AAC audio
+    // 30 FPS
+    // Artwork displayed for entire song
+    // --------------------------------------------------------
+
+    std::string args =
+        "-y "
+        "-loop 1 "
+        "-framerate 30 "
+        "-i " +
+        QuoteArgument(
+            imageFilename
+        ) +
+        " -i " +
+        QuoteArgument(
+            temporaryWav
+        ) +
+        " -map 0:v:0 "
+        "-map 1:a:0 "
+        "-vf \"scale=1920:1080:force_original_aspect_ratio=decrease,"
+        "pad=1920:1080:(ow-iw)/2:(oh-ih)/2,"
+        "format=yuv420p\" "
+        "-c:v libx264 "
+        "-preset medium "
+        "-crf 18 "
+        "-r 30 "
+        "-c:a aac "
+        "-b:a 320k "
+        "-shortest " +
+        QuoteArgument(
+            outputFilename
+        );
+
+    bool success =
+        RunFFmpeg(args);
+
+    DeleteFileA(
+        temporaryWav.c_str()
+    );
+
+    if (!success)
+    {
+        MessageBoxA(
+            mainWindow,
+            "FFmpeg could not create the MP4.",
+            "EXPORT YOUTUBE MP4",
+            MB_OK | MB_ICONERROR
+        );
+
+        return;
+    }
+
+    MessageBoxA(
+        mainWindow,
+        "YouTube MP4 exported successfully.",
+        "EXPORT YOUTUBE MP4",
+        MB_OK | MB_ICONINFORMATION
+    );
+}
+
+// ============================================================
+// PLAY SONG
+// ============================================================
+
+void PlaySongText(
+    const std::string& songText)
+{
+    if (playing || songText.empty())
+        return;
+
+    playing = true;
+    playingAll = false;
+    stopRequested = false;
+
+    std::vector<NoteEvent> notes;
+    std::vector<DrumEvent> drums;
+
+    double fileTempo = 120.0;
+    double loopLengthBeats = 4.0;
+
+    LoadSongText(
+        songText,
+        notes,
+        drums,
+        fileTempo,
+        loopLengthBeats
+    );
+
+    if (
+        notes.empty() &&
+        drums.empty())
+    {
+        playing = false;
+        return;
+    }
+
+    WAVEFORMATEX format = {};
+
+    format.wFormatTag =
+        WAVE_FORMAT_PCM;
+
+    format.nChannels = 1;
+
+    format.nSamplesPerSec =
+        SAMPLE_RATE;
+
+    format.wBitsPerSample = 16;
+
+    format.nBlockAlign = 2;
+
+    format.nAvgBytesPerSec =
+        SAMPLE_RATE * 2;
+
+    HWAVEOUT audioDevice = nullptr;
+
+    if (
+        waveOutOpen(
+            &audioDevice,
+            WAVE_MAPPER,
+            &format,
+            0,
+            0,
+            CALLBACK_NULL
+        ) != MMSYSERR_NOERROR)
+    {
+        playing = false;
+        return;
+    }
+
+    std::vector<short> samples;
+
+    if (!GenerateAudio(
+        songText,
+        currentTempo.load(),
+        currentPitch.load(),
+        GetVolumeMultiplier(
+            volumeBoost.load()
+        ),
+        samples))
+    {
+        waveOutClose(
+            audioDevice
+        );
+
+        playing = false;
+        return;
+    }
+
+    WAVEHDR header = {};
+
+    header.lpData =
+        reinterpret_cast<LPSTR>(
+            samples.data()
+        );
+
+    header.dwBufferLength =
+        static_cast<DWORD>(
+            samples.size() *
+            sizeof(short)
+        );
+
+    if (
+        waveOutPrepareHeader(
+            audioDevice,
+            &header,
+            sizeof(WAVEHDR)
+        ) != MMSYSERR_NOERROR)
+    {
+        waveOutClose(
+            audioDevice
+        );
+
+        playing = false;
+        return;
+    }
+
+    if (
+        waveOutWrite(
+            audioDevice,
+            &header,
+            sizeof(WAVEHDR)
+        ) != MMSYSERR_NOERROR)
+    {
+        waveOutUnprepareHeader(
+            audioDevice,
+            &header,
+            sizeof(WAVEHDR)
+        );
+
+        waveOutClose(
+            audioDevice
+        );
+
+        playing = false;
+        return;
+    }
+
+    while (!stopRequested)
+    {
+        if (header.dwFlags & WHDR_DONE)
+            break;
+
+        Sleep(1);
+    }
+
+    waveOutReset(
+        audioDevice
+    );
+
+    waveOutUnprepareHeader(
+        audioDevice,
+        &header,
+        sizeof(WAVEHDR)
+    );
+
+    waveOutClose(
+        audioDevice
+    );
+
+    playing = false;
+}
+
+// ============================================================
+// PLAY ALL SAVED TRACKS
+// ============================================================
+
+void PlayAllSavedTracks()
+{
+    if (
+        playing ||
+        savedTracks.empty())
+        return;
+
+    playing = true;
+    playingAll = true;
+    stopRequested = false;
+
+    std::vector<short> combinedSamples;
+
+    double tempo =
+        currentTempo.load();
+
+    int pitch =
+        currentPitch.load();
+
+    double multiplier =
+        GetVolumeMultiplier(
+            volumeBoost.load()
+        );
+
+    for (
+        const std::string& track :
+        savedTracks)
+    {
+        if (stopRequested)
+            break;
+
+        std::vector<short> trackSamples;
+
+        if (GenerateAudio(
+            track,
+            tempo,
+            pitch,
+            multiplier,
+            trackSamples))
+        {
+            combinedSamples.insert(
+                combinedSamples.end(),
+                trackSamples.begin(),
+                trackSamples.end()
+            );
+        }
+    }
+
+    if (
+        combinedSamples.empty() ||
+        stopRequested)
+    {
+        playing = false;
+        playingAll = false;
+        return;
+    }
+
+    WAVEFORMATEX format = {};
+
+    format.wFormatTag =
+        WAVE_FORMAT_PCM;
+
+    format.nChannels = 1;
+
+    format.nSamplesPerSec =
+        SAMPLE_RATE;
+
+    format.wBitsPerSample = 16;
+
+    format.nBlockAlign = 2;
+
+    format.nAvgBytesPerSec =
+        SAMPLE_RATE * 2;
+
+    HWAVEOUT audioDevice = nullptr;
+
+    if (
+        waveOutOpen(
+            &audioDevice,
+            WAVE_MAPPER,
+            &format,
+            0,
+            0,
+            CALLBACK_NULL
+        ) != MMSYSERR_NOERROR)
+    {
+        playing = false;
+        playingAll = false;
+        return;
+    }
+
+    WAVEHDR header = {};
+
+    header.lpData =
+        reinterpret_cast<LPSTR>(
+            combinedSamples.data()
+        );
+
+    header.dwBufferLength =
+        static_cast<DWORD>(
+            combinedSamples.size() *
+            sizeof(short)
+        );
+
+    if (
+        waveOutPrepareHeader(
+            audioDevice,
+            &header,
+            sizeof(WAVEHDR)
+        ) != MMSYSERR_NOERROR)
+    {
+        waveOutClose(
+            audioDevice
+        );
+
+        playing = false;
+        playingAll = false;
+
+        return;
+    }
+
+    while (!stopRequested)
+    {
+        header.dwFlags &= ~WHDR_DONE;
+
+        if (
+            waveOutWrite(
+                audioDevice,
+                &header,
+                sizeof(WAVEHDR)
+            ) != MMSYSERR_NOERROR)
+            break;
+
+        while (!stopRequested)
+        {
+            if (header.dwFlags & WHDR_DONE)
+                break;
+
+            Sleep(1);
+        }
+
+        if (stopRequested)
+            break;
+
+        if (!looping.load())
+            break;
+    }
+
+    waveOutReset(
+        audioDevice
+    );
+
+    waveOutUnprepareHeader(
+        audioDevice,
+        &header,
+        sizeof(WAVEHDR)
+    );
+
+    waveOutClose(
+        audioDevice
+    );
+
+    playing = false;
+    playingAll = false;
+}
+
+// ============================================================
+// PLAY EDITOR
+// ============================================================
+
+void PlayEditor()
+{
+    std::string text =
+        GetEditorText();
+
+    if (text.empty())
+        return;
+
+    if (playing)
+    {
+        stopRequested = true;
+        return;
+    }
+
+    std::thread(
+        PlaySongText,
+        text
+    ).detach();
+}
+
+// ============================================================
+// PLAY ALL
+// ============================================================
+
+void StartPlayAll()
+{
+    if (savedTracks.empty())
+    {
+        MessageBoxA(
+            mainWindow,
+            "There are no saved tracks.",
+            "PLAY ALL",
+            MB_OK | MB_ICONINFORMATION
+        );
+
+        return;
+    }
+
+    if (playing)
+    {
+        stopRequested = true;
+        return;
+    }
+
+    std::thread(
+        PlayAllSavedTracks
+    ).detach();
+}
+
+// ============================================================
+// DISPLAY UPDATES
+// ============================================================
+
+void UpdateTempoDisplay()
+{
+    if (!tempoLabel)
+        return;
+
+    char text[64];
+
+    std::snprintf(
+        text,
+        sizeof(text),
+        "TEMPO: %d",
+        static_cast<int>(
+            std::round(
+                currentTempo.load()
+            )
+        )
+    );
+
+    SetWindowTextA(
+        tempoLabel,
+        text
+    );
+}
+
+void UpdatePitchDisplay()
+{
+    if (!pitchLabel)
+        return;
+
+    char text[64];
+
+    int pitch =
+        currentPitch.load();
+
+    if (pitch > 0)
+    {
+        std::snprintf(
+            text,
+            sizeof(text),
+            "PITCH: +%d",
+            pitch
+        );
+    }
+    else
+    {
+        std::snprintf(
+            text,
+            sizeof(text),
+            "PITCH: %d",
+            pitch
+        );
+    }
+
+    SetWindowTextA(
+        pitchLabel,
+        text
+    );
+}
+
+void UpdateBoostDisplay()
+{
+    if (!boostButton)
+        return;
+
+    char text[64];
+
+    std::snprintf(
+        text,
+        sizeof(text),
+        "BOOST: %.1fx",
+        GetVolumeMultiplier(
+            volumeBoost.load()
+        )
+    );
+
+    SetWindowTextA(
+        boostButton,
+        text
+    );
+}
+
+// ============================================================
+// SAVE CURRENT TRACK
+// ============================================================
+
+void SaveCurrentTrack()
+{
+    std::string text =
+        GetEditorText();
+
+    if (text.empty())
+    {
+        MessageBoxA(
+            mainWindow,
+            "The editor is empty.",
+            "SAVE TRACK",
+            MB_OK | MB_ICONINFORMATION
+        );
+
+        return;
+    }
+
+    savedTracks.push_back(text);
+
+    MessageBoxA(
+        mainWindow,
+        "Track saved.",
+        "SAVE TRACK",
+        MB_OK | MB_ICONINFORMATION
+    );
+}
+
+// ============================================================
+// LOAD TRACK
+// ============================================================
+
+void LoadTrack(size_t index)
+{
+    if (index >= savedTracks.size())
+        return;
+
+    SetEditorText(
+        savedTracks[index]
+    );
+}
+
+// ============================================================
+// DELETE TRACK
+// ============================================================
+
+void DeleteTrack(size_t index)
+{
+    if (index >= savedTracks.size())
+        return;
+
+    savedTracks.erase(
+        savedTracks.begin() +
+        static_cast<std::ptrdiff_t>(
+            index
+        )
+    );
+}
+
+// ============================================================
+// COMBINE ALL SAVED TRACKS
+// ============================================================
+
+std::string CombineSavedTracks()
+{
+    if (savedTracks.empty())
+        return "";
+
+    double totalLength = 0.0;
+
+    // --------------------------------------------------------
+    // Calculate total length
+    // --------------------------------------------------------
+
+    for (const std::string& track : savedTracks)
+    {
+        std::vector<NoteEvent> notes;
+        std::vector<DrumEvent> drums;
+
+        double tempo = 120.0;
+        double length = 4.0;
+
+        LoadSongText(
+            track,
+            notes,
+            drums,
+            tempo,
+            length
+        );
+
+        if (length > 0.0)
+            totalLength += length;
+    }
+
+    std::ostringstream output;
+
+    output
+        << "TRACK COMBINED\r\n"
+        << "TEMPO "
+        << static_cast<int>(
+            std::round(
+                currentTempo.load()
+            )
+        )
+        << "\r\n"
+        << "LENGTH "
+        << totalLength
+        << "\r\n";
+
+    double offset = 0.0;
+
+    // --------------------------------------------------------
+    // Combine tracks
+    // --------------------------------------------------------
+
+    for (const std::string& track : savedTracks)
+    {
+        std::vector<NoteEvent> notes;
+        std::vector<DrumEvent> drums;
+
+        double tempo = 120.0;
+        double trackLength = 4.0;
+
+        LoadSongText(
+            track,
+            notes,
+            drums,
+            tempo,
+            trackLength
+        );
+
+        std::istringstream input(track);
+        std::string line;
+
+        while (std::getline(input, line))
+        {
+            if (line.empty())
+                continue;
+
+            std::istringstream lineStream(line);
+
+            std::string command;
+            lineStream >> command;
+
+            if (command.empty())
+                continue;
+
+            std::string upperCommand =
+                upper(command);
+
+            // ------------------------------------------------
+            // Skip track metadata
+            // ------------------------------------------------
+
+            if (
+                upperCommand == "TRACK" ||
+                upperCommand == "TEMPO" ||
+                upperCommand == "LENGTH")
+            {
+                continue;
+            }
+
+            // ------------------------------------------------
+            // DRUM
+            // ------------------------------------------------
+
+            if (upperCommand == "DRUM")
+            {
+                std::string drumType;
+                double startBeat = 0.0;
+
+                lineStream
+                    >> drumType
+                    >> startBeat;
+
+                output
+                    << command
+                    << " "
+                    << drumType
+                    << " "
+                    << (startBeat + offset)
+                    << "\r\n";
+
+                continue;
+            }
+
+            // ------------------------------------------------
+            // INSTRUMENT / NOTE
+            //
+            // The first words may contain spaces.
+            // The final 3 fields are:
+            //
+            //     NOTE_NAME START_BEAT DURATION
+            //
+            // Everything before those fields is the
+            // instrument name.
+            // ------------------------------------------------
+
+            std::vector<std::string> parts;
+            std::string part;
+
+            while (lineStream >> part)
+                parts.push_back(part);
+
+            if (parts.size() < 4)
+                continue;
+
+            std::string noteName =
+                parts[parts.size() - 3];
+
+            double startBeat = 0.0;
+            double durationBeats = 1.0;
+
+            try
+            {
+                startBeat =
+                    std::stod(
+                        parts[parts.size() - 2]
+                    );
+
+                durationBeats =
+                    std::stod(
+                        parts[parts.size() - 1]
+                    );
+            }
+            catch (...)
+            {
+                continue;
+            }
+
+            // Reconstruct the complete instrument name.
+            std::string instrument;
+
+            for (
+                size_t i = 0;
+                i + 3 < parts.size();
+                ++i)
+            {
+                if (!instrument.empty())
+                    instrument += " ";
+
+                instrument += parts[i];
+            }
+
+            if (instrument.empty())
+                continue;
+
+            output
+                << instrument
+                << " "
+                << noteName
+                << " "
+                << (startBeat + offset)
+                << " "
+                << durationBeats
+                << "\r\n";
+        }
+
+        offset += trackLength;
+    }
+
+    return output.str();
+}
+
+// ============================================================
+// SAVE COMBINED TRACK
+// ============================================================
+
+void SaveCombinedTrackToFile()
+{
+    if (savedTracks.empty())
+    {
+        MessageBoxA(
+            mainWindow,
+            "There are no saved tracks to combine.",
+            "COMBINE + SAVE",
+            MB_OK | MB_ICONINFORMATION
+        );
+
+        return;
+    }
+
+    std::string combined =
+        CombineSavedTracks();
+
+    if (combined.empty())
+    {
+        MessageBoxA(
+            mainWindow,
+            "Could not combine the tracks.",
+            "COMBINE + SAVE",
+            MB_OK | MB_ICONERROR
+        );
+
+        return;
+    }
+
+    char filename[MAX_PATH] =
+        "combined_song.song";
+
+    OPENFILENAMEA dialog = {};
+
+    dialog.lStructSize =
+        sizeof(OPENFILENAMEA);
+
+    dialog.hwndOwner =
+        mainWindow;
+
+    dialog.lpstrFilter =
+        "Music Track Files (*.song)\0*.song\0"
+        "Text Files (*.txt)\0*.txt\0"
+        "All Files (*.*)\0*.*\0";
+
+    dialog.lpstrFile =
+        filename;
+
+    dialog.nMaxFile =
+        MAX_PATH;
+
+    dialog.Flags =
+        OFN_OVERWRITEPROMPT |
+        OFN_PATHMUSTEXIST;
+
+    dialog.lpstrDefExt =
+        "song";
+
+    if (!GetSaveFileNameA(
+        &dialog))
+        return;
+
+    std::ofstream file(
+        filename,
+        std::ios::out |
+        std::ios::trunc
+    );
+
+    if (!file)
+    {
+        MessageBoxA(
+            mainWindow,
+            "Could not save the file.",
+            "COMBINE + SAVE",
+            MB_OK | MB_ICONERROR
+        );
+
+        return;
+    }
+
+    file << combined;
+
+    file.close();
+
+    MessageBoxA(
+        mainWindow,
+        "All saved tracks were combined and saved.",
+        "COMBINE + SAVE",
+        MB_OK | MB_ICONINFORMATION
+    );
+}
+
+// ============================================================
+// IMPORT TRACKS
+// ============================================================
+
+void RebuildTrackControls();
+
+void ImportTracksFromFile()
+{
+    char filename[MAX_PATH] = "";
+
+    OPENFILENAMEA dialog = {};
+
+    dialog.lStructSize =
+        sizeof(OPENFILENAMEA);
+
+    dialog.hwndOwner =
+        mainWindow;
+
+    dialog.lpstrFilter =
+        "Music Track Files (*.song)\0*.song\0"
+        "Text Files (*.txt)\0*.txt\0"
+        "All Files (*.*)\0*.*\0";
+
+    dialog.lpstrFile =
+        filename;
+
+    dialog.nMaxFile =
+        MAX_PATH;
+
+    dialog.Flags =
+        OFN_FILEMUSTEXIST |
+        OFN_PATHMUSTEXIST;
+
+    if (!GetOpenFileNameA(
+        &dialog))
+        return;
+
+    std::ifstream file(
+        filename,
+        std::ios::in
+    );
+
+    if (!file)
+    {
+        MessageBoxA(
+            mainWindow,
+            "Could not open the file.",
+            "IMPORT",
+            MB_OK | MB_ICONERROR
+        );
+
+        return;
+    }
+
+    std::stringstream buffer;
+
+    buffer << file.rdbuf();
+
+    file.close();
+
+    std::string contents =
+        buffer.str();
+
+    if (contents.empty())
+    {
+        MessageBoxA(
+            mainWindow,
+            "The selected file is empty.",
+            "IMPORT",
+            MB_OK | MB_ICONWARNING
+        );
+
+        return;
+    }
+
+    savedTracks.push_back(
+        contents
+    );
+
+    RebuildTrackControls();
+
+    MessageBoxA(
+        mainWindow,
+        "Track imported.",
+        "IMPORT",
+        MB_OK | MB_ICONINFORMATION
+    );
+}
+
+// ============================================================
+// TEMPO / PITCH / BOOST
+// ============================================================
+
+void ChangeTempo(double amount)
+{
+    double tempo =
+        currentTempo.load();
+
+    tempo += amount;
+
+    tempo =
+        std::max(
+            MIN_TEMPO,
+            std::min(
+                MAX_TEMPO,
+                tempo
+            )
+        );
+
+    currentTempo =
+        tempo;
+
+    UpdateTempoDisplay();
+}
+
+void ChangePitch(int amount)
+{
+    int pitch =
+        currentPitch.load();
+
+    pitch += amount;
+
+    pitch =
+        std::max(
+            MIN_PITCH,
+            std::min(
+                MAX_PITCH,
+                pitch
+            )
+        );
+
+    currentPitch =
+        pitch;
+
+    UpdatePitchDisplay();
+}
+
+void ChangeBoost()
+{
+    int boost =
+        volumeBoost.load();
+
+    boost++;
+
+    if (boost > 3)
+        boost = 0;
+
+    volumeBoost =
+        boost;
+
+    UpdateBoostDisplay();
+}
+
+// ============================================================
+// CHORDS
+// ============================================================
+
+std::vector<std::string> GetChordRoots()
+{
+    return
+    {
+        "C","C#","D","D#","E","F",
+        "F#","G","G#","A","A#","B"
+    };
+}
+
+std::vector<std::string> GetChordTypes()
+{
+    return
+    {
+        "MAJOR",
+        "MINOR",
+        "MINOR 7",
+        "MAJOR 7"
+    };
+}
+
+std::string NoteFromSemitone(
+    int semitone)
+{
+    static const char* names[] =
+    {
+        "C","C#","D","D#","E","F",
+        "F#","G","G#","A","A#","B"
+    };
+
+    int octave =
+        4 +
+        semitone / 12;
+
+    int index =
+        semitone % 12;
+
+    if (index < 0)
+    {
+        index += 12;
+        octave--;
+    }
+
+    return
+        std::string(names[index]) +
+        std::to_string(octave);
+}
+
+std::vector<std::string> GetChordNotes(
+    const std::string& root,
+    const std::string& type)
+{
+    std::vector<std::string> roots =
+        GetChordRoots();
+
+    int rootIndex = 0;
+
+    for (
+        int i = 0;
+        i < static_cast<int>(
+            roots.size());
+        ++i)
+    {
+        if (roots[i] == root)
+        {
+            rootIndex = i;
+            break;
+        }
+    }
+
+    std::vector<int> intervals;
+
+    if (type == "MAJOR")
+        intervals = {0, 4, 7};
+    else if (type == "MINOR")
+        intervals = {0, 3, 7};
+    else if (type == "MINOR 7")
+        intervals = {0, 3, 7, 10};
+    else if (type == "MAJOR 7")
+        intervals = {0, 4, 7, 11};
+
+    std::vector<std::string> result;
+
+    for (int interval : intervals)
+    {
+        result.push_back(
+            NoteFromSemitone(
+                rootIndex +
+                interval
+            )
+        );
+    }
+
+    return result;
+}
+
+// ============================================================
+// DRUM LIST
+// ============================================================
+
+std::vector<std::string> GetDrums()
+{
+    return
+    {
+        // KICKS
+        "KICK",
+        "KICK 2",
+        "KICK 3",
+        "ELECTRONIC KICK",
+        "SYNTH KICK",
+
+        // SNARES / CLAPS
+        "SNARE",
+        "SNARE 2",
+        "SNARE 3",
+        "ELECTRONIC SNARE",
+        "SYNTH SNARE",
+        "RIMSHOT",
+        "SYNTH RIM",
+        "CLAP",
+        "HAND CLAP",
+        "ELECTRONIC CLAP",
+        "SYNTH CLAP",
+        "SIDE STICK",
+        "FINGER SNAP",
+
+        // HI-HATS
+        "HIHAT",
+        "OPEN HIHAT",
+        "HIHAT PEDAL",
+        "ELECTRONIC HIHAT",
+
+        // TOMS
+        "LOW TOM",
+        "LOW MID TOM",
+        "MID TOM",
+        "HIGH MID TOM",
+        "HIGH TOM",
+        "ELECTRONIC TOM",
+        "SYNTH TOM",
+
+        // CYMBALS
+        "CRASH",
+        "CRASH 2",
+        "CRASH SHORT",
+        "CRASH LONG",
+        "REVERSE CRASH",
+        "RIDE",
+        "RIDE 2",
+        "RIDE BELL",
+        "RIDE SHORT",
+        "RIDE LONG",
+        "SPLASH",
+        "CHINA",
+        "REVERSE CYMBAL",
+
+        // METAL / BELLS
+        "COWBELL",
+        "COWBELL LOW",
+        "COWBELL HIGH",
+        "BELL",
+        "LOW BELL",
+        "HIGH BELL",
+        "GONG",
+        "TAM TAM",
+        "METAL HIT",
+        "METAL CLANK",
+        "METAL SCRAPE",
+
+        // HAND PERCUSSION
+        "HAND DRUM",
+        "CONGA LOW",
+        "CONGA MID",
+        "CONGA HIGH",
+        "OPEN CONGA",
+        "MUTE CONGA",
+        "BONGO LOW",
+        "BONGO HIGH",
+        "DJEMBE LOW",
+        "DJEMBE MID",
+        "DJEMBE HIGH",
+        "TABLA LOW",
+        "TABLA HIGH",
+        "TIMBALE LOW",
+        "TIMBALE HIGH",
+        "TIMPANI",
+        "TAIKO",
+        "GRANDE CASSA",
+
+        // SMALL PERCUSSION
+        "TAMBOURINE",
+        "TAMBOURINE LOW",
+        "TAMBOURINE HIGH",
+        "SHAKER",
+        "SHAKER LOW",
+        "SHAKER HIGH",
+        "MARACAS",
+        "CABASA",
+        "CLAVES",
+        "WOODBLOCK",
+        "GUIRO",
+        "AGOGO LOW",
+        "AGOGO HIGH",
+        "VIBRASLAP",
+        "CASTANETS",
+        "TRIANGLE",
+        "TRIANGLE OPEN",
+        "TRIANGLE MUTE",
+        "BLOCK LOW",
+        "BLOCK HIGH",
+
+        // SPECIAL / EFFECT PERCUSSION
+        "ORCHESTRA HIT",
+        "PERCUSSION LOW",
+        "PERCUSSION MID",
+        "PERCUSSION HIGH",
+        "WOOD HIT",
+        "WOOD CLICK",
+
+        // NOISE / IMPACTS
+        "NOISE HIT",
+        "NOISE BURST",
+        "CLICK",
+        "POP",
+        "DROP",
+        "IMPACT",
+        "IMPACT LOW",
+        "IMPACT HIGH",
+        "EXPLOSION",
+
+        // OTHER
+        "WHISTLE LOW",
+        "WHISTLE HIGH",
+        "BREATH",
+        "FOOTSTEP",
+        "HEARTBEAT",
+        "LASER HIT",
+        "LASER LOW",
+        "LASER HIGH"
+    };
+}
+
+// ============================================================
+// CONVERT DRUM DISPLAY NAME TO COMMAND NAME
+// ============================================================
+
+std::string DrumCommandName(
+    const std::string& displayName)
+{
+    std::string result = displayName;
+
+    for (char& c : result)
+    {
+        if (c == ' ')
+            c = '_';
+    }
+
+    return result;
+}
+
+// ============================================================
+// BUILD INSTRUMENT MENU
+// ============================================================
+
+HMENU BuildInstrumentMenu()
+{
+    HMENU menu =
+        CreatePopupMenu();
+
+    // Clear old note commands.
+    // The popup menu is rebuilt every time it is opened,
+    // so the command table should also be rebuilt.
+    noteCommands.clear();
+
+    UINT nextID = ID_NOTE_BASE;
+
+    for (
+        const std::string& instrument :
+        GetInstruments())
+    {
+        HMENU noteMenu =
+            CreatePopupMenu();
+
+        for (
+            const std::string& note :
+            GetNotes())
+        {
+            // Make sure we stay inside the NOTE command range.
+            if (nextID >= ID_CHORD_BASE)
+                break;
+
+            UINT id = nextID++;
+
+            // Store the EXACT instrument + note combination
+            // associated with this menu item.
+            noteCommands[id] =
+                instrument +
+                " " +
+                note +
+                " 0 1";
+
+            AppendMenuA(
+                noteMenu,
+                MF_STRING,
+                id,
+                note.c_str()
+            );
+        }
+
+        AppendMenuA(
+            menu,
+            MF_POPUP,
+            reinterpret_cast<UINT_PTR>(
+                noteMenu
+            ),
+            instrument.c_str()
+        );
+    }
+
+    return menu;
+}
+
+// ============================================================
+// BUILD CHORD MENU
+// ============================================================
+
+HMENU BuildChordMenu()
+{
+    HMENU menu =
+        CreatePopupMenu();
+
+    for (
+        const std::string& instrument :
+        GetInstruments())
+    {
+        HMENU instrumentMenu =
+            CreatePopupMenu();
+
+        for (
+            const std::string& root :
+            GetChordRoots())
+        {
+            HMENU rootMenu =
+                CreatePopupMenu();
+
+            for (
+                const std::string& type :
+                GetChordTypes())
+            {
+                UINT id =
+                    ID_CHORD_BASE +
+                    static_cast<UINT>(
+                        chordCommands.size()
+                    );
+
+                std::string command;
+
+                for (
+                    const std::string& note :
+                    GetChordNotes(
+                        root,
+                        type))
+                {
+                    command +=
+                        instrument +
+                        " " +
+                        note +
+                        " 0 1\r\n";
+                }
+
+                chordCommands[id] =
+                    command;
+
+                std::string label =
+                    root +
+                    " " +
+                    type;
+
+                AppendMenuA(
+                    rootMenu,
+                    MF_STRING,
+                    id,
+                    label.c_str()
+                );
+            }
+
+            AppendMenuA(
+                instrumentMenu,
+                MF_POPUP,
+                reinterpret_cast<UINT_PTR>(
+                    rootMenu
+                ),
+                root.c_str()
+            );
+        }
+
+        AppendMenuA(
+            menu,
+            MF_POPUP,
+            reinterpret_cast<UINT_PTR>(
+                instrumentMenu
+            ),
+            instrument.c_str()
+        );
+    }
+
+    return menu;
+}
+
+
+
+// ============================================================
+// SHOW MENUS
+// ============================================================
+
+void ShowInstrumentSelector()
+{
+    POINT point;
+
+    GetCursorPos(&point);
+
+    HMENU menu =
+        BuildInstrumentMenu();
+
+    TrackPopupMenu(
+        menu,
+        TPM_LEFTALIGN |
+        TPM_TOPALIGN |
+        TPM_RIGHTBUTTON,
+        point.x,
+        point.y,
+        0,
+        mainWindow,
+        nullptr
+    );
+
+    DestroyMenu(menu);
+}
+
+void ShowChordSelector()
+{
+    POINT point;
+
+    GetCursorPos(&point);
+
+    HMENU menu =
+        BuildChordMenu();
+
+    TrackPopupMenu(
+        menu,
+        TPM_LEFTALIGN |
+        TPM_TOPALIGN |
+        TPM_RIGHTBUTTON,
+        point.x,
+        point.y,
+        0,
+        mainWindow,
+        nullptr
+    );
+
+    DestroyMenu(menu);
+}
+
+// ============================================================
+// BUILD DRUM MENU
+// ============================================================
+
+HMENU BuildDrumMenu()
+{
+    HMENU menu =
+        CreatePopupMenu();
+
+    if (!menu)
+        return nullptr;
+
+    for (
+        const std::string& drum :
+        GetDrums())
+    {
+        HMENU beatMenu =
+            CreatePopupMenu();
+
+        if (!beatMenu)
+            continue;
+
+        std::string drumType =
+            DrumCommandName(
+                drum
+            );
+
+        for (int i = 0; i < 16; ++i)
+        {
+            double beat =
+                static_cast<double>(i) *
+                0.5;
+
+            // IMPORTANT:
+            // Use the dedicated drum ID range.
+            UINT id =
+                ID_DRUM_BASE +
+                static_cast<UINT>(
+                    drumCommands.size()
+                );
+
+            char beatText[32];
+
+            if (
+                std::fabs(
+                    beat -
+                    std::round(beat)
+                ) < 0.001)
+            {
+                std::snprintf(
+                    beatText,
+                    sizeof(beatText),
+                    "BEAT %d",
+                    static_cast<int>(
+                        beat
+                    )
+                );
+            }
+            else
+            {
+                std::snprintf(
+                    beatText,
+                    sizeof(beatText),
+                    "BEAT %.1f",
+                    beat
+                );
+            }
+
+            char commandText[128];
+
+            std::snprintf(
+                commandText,
+                sizeof(commandText),
+                "DRUM %s %.1f",
+                drumType.c_str(),
+                beat
+            );
+
+            drumCommands[id] =
+                commandText;
+
+            AppendMenuA(
+                beatMenu,
+                MF_STRING,
+                id,
+                beatText
+            );
+        }
+
+        AppendMenuA(
+            menu,
+            MF_POPUP,
+            reinterpret_cast<UINT_PTR>(
+                beatMenu
+            ),
+            drum.c_str()
+        );
+    }
+
+    return menu;
+}
+
+HMENU BuildDrumMenu();
+// ============================================================
+// SHOW DRUM SELECTOR
+// ============================================================
+
+void ShowDrumSelector()
+{
+    POINT point;
+
+    GetCursorPos(&point);
+
+    HMENU menu =
+        BuildDrumMenu();
+
+    if (!menu)
+        return;
+
+    // Return the selected command ID directly.
+    UINT id =
+        TrackPopupMenu(
+            menu,
+            TPM_LEFTALIGN |
+            TPM_TOPALIGN |
+            TPM_RIGHTBUTTON |
+            TPM_RETURNCMD,
+            point.x,
+            point.y,
+            0,
+            mainWindow,
+            nullptr
+        );
+
+    DestroyMenu(menu);
+
+    // User clicked outside the menu or pressed ESC.
+    if (id == 0)
+        return;
+
+    // --------------------------------------------------------
+    // DRUM COMMAND
+    // --------------------------------------------------------
+
+    if (
+        id >= ID_DRUM_BASE &&
+        id < ID_DRUM_BASE + 10000)
+    {
+        auto drumIt =
+            drumCommands.find(id);
+
+        if (
+            drumIt !=
+            drumCommands.end())
+        {
+            InsertEditorText(
+                drumIt->second +
+                "\r\n"
+            );
+        }
+
+        return;
+    }
+}
+
+// ============================================================
+// DRAW BUTTON
+// ============================================================
+
+void DrawOwnerButton(
+    LPDRAWITEMSTRUCT dis)
+{
+    if (!dis)
+        return;
+
+    HDC dc =
+        dis->hDC;
+
+    RECT rect =
+        dis->rcItem;
+
+    bool pressed =
+        (dis->itemState &
+         ODS_SELECTED) != 0;
+
+    COLORREF background =
+        pressed
+            ? RGB(45, 45, 55)
+            : COLUMN;
+
+    HBRUSH backgroundBrush =
+        CreateSolidBrush(
+            background
+        );
+
+    FillRect(
+        dc,
+        &rect,
+        backgroundBrush
+    );
+
+    DeleteObject(
+        backgroundBrush
+    );
+
+    COLORREF borderColor =
+        (dis->itemState &
+         ODS_FOCUS)
+            ? RGB(0, 255, 0)
+            : COLUMN_BORDER;
+
+    HPEN pen =
+        CreatePen(
+            PS_SOLID,
+            1,
+            borderColor
+        );
+
+    HPEN oldPen =
+        static_cast<HPEN>(
+            SelectObject(
+                dc,
+                pen
+            )
+        );
+
+    HBRUSH oldBrush =
+        static_cast<HBRUSH>(
+            SelectObject(
+                dc,
+                GetStockObject(
+                    NULL_BRUSH
+                )
+            )
+        );
+
+    Rectangle(
+        dc,
+        rect.left,
+        rect.top,
+        rect.right,
+        rect.bottom
+    );
+
+    SelectObject(
+        dc,
+        oldBrush
+    );
+
+    SelectObject(
+        dc,
+        oldPen
+    );
+
+    DeleteObject(pen);
+
+    char text[256];
+
+    GetWindowTextA(
+        dis->hwndItem,
+        text,
+        sizeof(text)
+    );
+
+    SetBkMode(
+        dc,
+        TRANSPARENT
+    );
+
+    SetTextColor(
+        dc,
+        BUTTON_TEXT
+    );
+
+    HFONT font =
+        static_cast<HFONT>(
+            GetStockObject(
+                DEFAULT_GUI_FONT
+            )
+        );
+
+    HFONT oldFont =
+        static_cast<HFONT>(
+            SelectObject(
+                dc,
+                font
+            )
+        );
+
+    if (pressed)
+        OffsetRect(
+            &rect,
+            1,
+            1
+        );
+
+    DrawTextA(
+        dc,
+        text,
+        -1,
+        &rect,
+        DT_CENTER |
+        DT_VCENTER |
+        DT_SINGLELINE
+    );
+
+    SelectObject(
+        dc,
+        oldFont
+    );
+}
+
+// ============================================================
+// CREATE CUSTOM BUTTON
+// ============================================================
+
+HWND CreateCustomButton(
+    const char* text,
+    int x,
+    int y,
+    int width,
+    int height,
+    UINT id)
+{
+    return CreateWindowExA(
+        0,
+        "BUTTON",
+        text,
+        WS_CHILD |
+        WS_VISIBLE |
+        BS_OWNERDRAW,
+        x,
+        y,
+        width,
+        height,
+        mainWindow,
+        reinterpret_cast<HMENU>(
+            static_cast<UINT_PTR>(id)
+        ),
+        GetModuleHandleA(nullptr),
+        nullptr
+    );
+}
+
+// ============================================================
+// TRACK CONTROLS
+// ============================================================
+
+UINT MakeTrackCommand(
+    UINT base,
+    size_t index)
+{
+    return
+        base +
+        static_cast<UINT>(
+            index
+        );
+}
+
+void RebuildTrackControls()
+{
+    std::vector<HWND> children;
+
+    HWND child =
+        GetWindow(
+            mainWindow,
+            GW_CHILD
+        );
+
+    while (child)
+    {
+        HWND next =
+            GetWindow(
+                child,
+                GW_HWNDNEXT
+            );
+
+        LONG_PTR id =
+            GetWindowLongPtrA(
+                child,
+                GWLP_ID
+            );
+
+        if (
+            (id >= ID_LOAD_TRACK_BASE &&
+             id <
+             ID_LOAD_TRACK_BASE + 1000)
+            ||
+            (id >= ID_PLAY_TRACK_BASE &&
+             id <
+             ID_PLAY_TRACK_BASE + 1000)
+            ||
+            (id >= ID_DELETE_TRACK_BASE &&
+             id <
+             ID_DELETE_TRACK_BASE + 1000)
+        )
+        {
+            children.push_back(
+                child
+            );
+        }
+
+        child = next;
+    }
+
+    for (HWND hwnd : children)
+        DestroyWindow(hwnd);
+
+    int y =
+        TRACK_TOP -
+        scrollY;
+
+    for (
+        size_t i = 0;
+        i < savedTracks.size();
+        ++i)
+    {
+        char label[64];
+
+        std::snprintf(
+            label,
+            sizeof(label),
+            "TRACK %d",
+            static_cast<int>(
+                i + 1
+            )
+        );
+
+        HWND trackLabel =
+            CreateWindowExA(
+                0,
+                "STATIC",
+                label,
+                WS_CHILD |
+                WS_VISIBLE,
+                LEFT_MARGIN,
+                y,
+                100,
+                TRACK_BUTTON_HEIGHT,
+                mainWindow,
+                nullptr,
+                GetModuleHandleA(
+                    nullptr
+                ),
+                nullptr
+            );
+
+        HDC labelDC =
+            GetDC(
+                trackLabel
+            );
+
+        SetTextColor(
+            labelDC,
+            TEXT_COLOR
+        );
+
+        SetBkMode(
+            labelDC,
+            TRANSPARENT
+        );
+
+        ReleaseDC(
+            trackLabel,
+            labelDC
+        );
+
+        CreateCustomButton(
+            "LOAD",
+            120,
+            y,
+            90,
+            TRACK_BUTTON_HEIGHT,
+            MakeTrackCommand(
+                ID_LOAD_TRACK_BASE,
+                i
+            )
+        );
+
+        CreateCustomButton(
+            "PLAY",
+            218,
+            y,
+            90,
+            TRACK_BUTTON_HEIGHT,
+            MakeTrackCommand(
+                ID_PLAY_TRACK_BASE,
+                i
+            )
+        );
+
+        CreateCustomButton(
+            "DELETE",
+            316,
+            y,
+            90,
+            TRACK_BUTTON_HEIGHT,
+            MakeTrackCommand(
+                ID_DELETE_TRACK_BASE,
+                i
+            )
+        );
+
+        y +=
+            TRACK_BUTTON_HEIGHT +
+            TRACK_GAP;
+    }
+
+    contentHeight =
+        std::max(
+            900,
+            y + 100
+        );
+
+    InvalidateRect(
+        mainWindow,
+        nullptr,
+        TRUE
+    );
+}
+
+// ============================================================
+// CREATE MAIN CONTROLS
+// ============================================================
+
+void CreateMainControls()
+{
+    playButton =
+        CreateCustomButton(
+            "PLAY",
+            15,
+            20,
+            100,
+            40,
+            ID_PLAY
+        );
+
+    playAllButton =
+        CreateCustomButton(
+            "PLAY ALL",
+            125,
+            20,
+            110,
+            40,
+            ID_PLAY_ALL
+        );
+
+    loopButton =
+        CreateCustomButton(
+            "LOOP: OFF",
+            245,
+            20,
+            110,
+            40,
+            ID_LOOP
+        );
+
+    boostButton =
+        CreateCustomButton(
+            "BOOST: 1.0x",
+            365,
+            20,
+            120,
+            40,
+            ID_BOOST
+        );
+
+    saveTrackButton =
+        CreateCustomButton(
+            "SAVE TRACK",
+            500,
+            20,
+            130,
+            40,
+            ID_SAVE_TRACK
+        );
+
+    combineSaveButton =
+        CreateCustomButton(
+            "COMBINE + SAVE",
+            640,
+            20,
+            150,
+            40,
+            ID_COMBINE_SAVE
+        );
+
+    importButton =
+        CreateCustomButton(
+            "IMPORT",
+            800,
+            20,
+            100,
+            40,
+            ID_IMPORT_TRACKS
+        );
+
+    exportWavButton =
+        CreateCustomButton(
+            "EXPORT WAV",
+            910,
+            20,
+            110,
+            40,
+            ID_EXPORT_WAV
+        );
+
+    exportMp3Button =
+        CreateCustomButton(
+            "EXPORT MP3",
+            1030,
+            20,
+            110,
+            40,
+            ID_EXPORT_MP3
+        );
+
+    exportMp4Button =
+        CreateCustomButton(
+            "YOUTUBE MP4",
+            910,
+            65,
+            130,
+            40,
+            ID_EXPORT_MP4
+        );
+
+    // --------------------------------------------------------
+    // INSTRUMENTS
+    // --------------------------------------------------------
+
+    instrumentsButton =
+        CreateCustomButton(
+            "INSTRUMENTS",
+            15,
+            75,
+            130,
+            40,
+            ID_INSTRUMENTS
+        );
+
+    chordsButton =
+        CreateCustomButton(
+            "CHORDS",
+            155,
+            75,
+            110,
+            40,
+            ID_CHORDS
+        );
+
+    drumsButton =
+        CreateCustomButton(
+            "DRUMS",
+            275,
+            75,
+            110,
+            40,
+            ID_DRUMS
+        );
+
+    // --------------------------------------------------------
+    // TEMPO
+    // --------------------------------------------------------
+
+    tempoMinusButton =
+        CreateCustomButton(
+            "-",
+            405,
+            75,
+            40,
+            40,
+            ID_TEMPO_MINUS
+        );
+
+    tempoPlusButton =
+        CreateCustomButton(
+            "+",
+            495,
+            75,
+            40,
+            40,
+            ID_TEMPO_PLUS
+        );
+
+    tempoLabel =
+        CreateWindowExA(
+            0,
+            "STATIC",
+            "TEMPO: 120",
+            WS_CHILD |
+            WS_VISIBLE |
+            SS_CENTER,
+            445,
+            75,
+            50,
+            40,
+            mainWindow,
+            nullptr,
+            GetModuleHandleA(
+                nullptr
+            ),
+            nullptr
+        );
+
+    // --------------------------------------------------------
+    // PITCH
+    // --------------------------------------------------------
+
+    pitchMinusButton =
+        CreateCustomButton(
+            "-",
+            405,
+            125,
+            40,
+            40,
+            ID_PITCH_MINUS
+        );
+
+    pitchPlusButton =
+        CreateCustomButton(
+            "+",
+            495,
+            125,
+            40,
+            40,
+            ID_PITCH_PLUS
+        );
+
+    pitchLabel =
+        CreateWindowExA(
+            0,
+            "STATIC",
+            "PITCH: 0",
+            WS_CHILD |
+            WS_VISIBLE |
+            SS_CENTER,
+            445,
+            125,
+            50,
+            40,
+            mainWindow,
+            nullptr,
+            GetModuleHandleA(
+                nullptr
+            ),
+            nullptr
+        );
+
+    // --------------------------------------------------------
+    // EDITOR
+    // --------------------------------------------------------
+
+    songEditor =
+        CreateWindowExA(
+            WS_EX_CLIENTEDGE,
+            "EDIT",
+            "",
+            WS_CHILD |
+            WS_VISIBLE |
+            WS_VSCROLL |
+            WS_HSCROLL |
+            ES_MULTILINE |
+            ES_AUTOVSCROLL |
+            ES_AUTOHSCROLL |
+            ES_WANTRETURN,
+            LEFT_MARGIN,
+            EDITOR_TOP,
+            1120,
+            EDITOR_HEIGHT,
+            mainWindow,
+            nullptr,
+            GetModuleHandleA(
+                nullptr
+            ),
+            nullptr
+        );
+
+    HFONT editorFont =
+        CreateFontA(
+            16,
+            0,
+            0,
+            0,
+            FW_NORMAL,
+            FALSE,
+            FALSE,
+            FALSE,
+            ANSI_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            DEFAULT_QUALITY,
+            FIXED_PITCH | FF_MODERN,
+            "Consolas"
+        );
+
+    SendMessage(
+        songEditor,
+        WM_SETFONT,
+        reinterpret_cast<WPARAM>(
+            editorFont
+        ),
+        TRUE
+    );
+
+    editBrush =
+        CreateSolidBrush(
+            EDIT_BACKGROUND
+        );
+
+    UpdateTempoDisplay();
+    UpdatePitchDisplay();
+    UpdateBoostDisplay();
+
+    RebuildTrackControls();
+}
+
+// ============================================================
+// PAINT MAIN WINDOW
+// ============================================================
+
+void PaintMainWindow(
+    HWND hwnd,
+    HDC dc)
+{
+    RECT rect;
+
+    GetClientRect(
+        hwnd,
+        &rect
+    );
+
+    HBRUSH backgroundBrush =
+        CreateSolidBrush(
+            BACKGROUND
+        );
+
+    FillRect(
+        dc,
+        &rect,
+        backgroundBrush
+    );
+
+    DeleteObject(
+        backgroundBrush
+    );
+
+    SetBkMode(
+        dc,
+        TRANSPARENT
+    );
+
+    SetTextColor(
+        dc,
+        RGB(0, 0, 0)
+    );
+
+    HFONT titleFont =
+        CreateFontA(
+            24,
+            0,
+            0,
+            0,
+            FW_BOLD,
+            FALSE,
+            FALSE,
+            FALSE,
+            ANSI_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            DEFAULT_QUALITY,
+            DEFAULT_PITCH,
+            "Arial"
+        );
+
+    HFONT oldFont =
+        static_cast<HFONT>(
+            SelectObject(
+                dc,
+                titleFont
+            )
+        );
+
+    TextOutA(
+        dc,
+        15,
+        145,
+        "MUSIC TRACK EDITOR",
+        -1
+    );
+
+    SelectObject(
+        dc,
+        oldFont
+    );
+
+    DeleteObject(
+        titleFont
+    );
+
+    HFONT normalFont =
+        static_cast<HFONT>(
+            GetStockObject(
+                DEFAULT_GUI_FONT
+            )
+        );
+
+    oldFont =
+        static_cast<HFONT>(
+            SelectObject(
+                dc,
+                normalFont
+            )
+        );
+
+    TextOutA(
+        dc,
+        LEFT_MARGIN,
+        TRACK_TOP - 30 - scrollY,
+        "SAVED TRACKS",
+        -1
+    );
+
+    SelectObject(
+        dc,
+        oldFont
+    );
+}
+
+// ============================================================
+// MAIN WINDOW PROCEDURE
+// ============================================================
+
+LRESULT CALLBACK MainWindowProc(
+    HWND hwnd,
+    UINT message,
+    WPARAM wParam,
+    LPARAM lParam)
+{
+    switch (message)
+    {
+        // ----------------------------------------------------
+        // CREATE
+        // ----------------------------------------------------
+
+        case WM_CREATE:
+        {
+            mainWindow = hwnd;
+
+            CreateMainControls();
+
+            return 0;
+        }
+
+        // ----------------------------------------------------
+        // PAINT
+        // ----------------------------------------------------
+
+        case WM_PAINT:
+        {
+            PAINTSTRUCT ps;
+
+            HDC dc =
+                BeginPaint(
+                    hwnd,
+                    &ps
+                );
+
+            PaintMainWindow(
+                hwnd,
+                dc
+            );
+
+            EndPaint(
+                hwnd,
+                &ps
+            );
+
+            return 0;
+        }
+
+        // ----------------------------------------------------
+        // EDITOR COLORS
+        // ----------------------------------------------------
+
+        case WM_CTLCOLOREDIT:
+        {
+            HDC dc =
+                reinterpret_cast<HDC>(
+                    wParam
+                );
+
+            SetTextColor(
+                dc,
+                EDIT_TEXT
+            );
+
+            SetBkColor(
+                dc,
+                EDIT_BACKGROUND
+            );
+
+            if (!editBrush)
+            {
+                editBrush =
+                    CreateSolidBrush(
+                        EDIT_BACKGROUND
+                    );
+            }
+
+            return reinterpret_cast<LRESULT>(
+                editBrush
+            );
+        }
+
+        // ----------------------------------------------------
+        // STATIC COLORS
+        // ----------------------------------------------------
+
+        case WM_CTLCOLORSTATIC:
+        {
+            HDC dc =
+                reinterpret_cast<HDC>(
+                    wParam
+                );
+
+            SetTextColor(
+                dc,
+                TEXT_COLOR
+            );
+
+            SetBkMode(
+                dc,
+                TRANSPARENT
+            );
+
+            static HBRUSH staticBrush =
+                nullptr;
+
+            if (!staticBrush)
+            {
+                staticBrush =
+                    CreateSolidBrush(
+                        BACKGROUND
+                    );
+            }
+
+            return reinterpret_cast<LRESULT>(
+                staticBrush
+            );
+        }
+
+        // ----------------------------------------------------
+        // OWNER DRAW
+        // ----------------------------------------------------
+
+        case WM_DRAWITEM:
+        {
+            DrawOwnerButton(
+                reinterpret_cast<
+                    LPDRAWITEMSTRUCT
+                >(lParam)
+            );
+
+            return TRUE;
+        }
+
+        // ----------------------------------------------------
+        // COMMANDS
+        // ----------------------------------------------------
+
+        case WM_COMMAND:
+        {
+            UINT id =
+                LOWORD(wParam);
+
+            // ------------------------------------------------
+            // PLAY
+            // ------------------------------------------------
+
+            if (id == ID_PLAY)
+            {
+                PlayEditor();
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // PLAY ALL
+            // ------------------------------------------------
+
+            if (id == ID_PLAY_ALL)
+            {
+                StartPlayAll();
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // LOOP
+            // ------------------------------------------------
+
+            if (id == ID_LOOP)
+            {
+                bool newValue =
+                    !looping.load();
+
+                looping =
+                    newValue;
+
+                SetWindowTextA(
+                    loopButton,
+                    newValue
+                        ? "LOOP: ON"
+                        : "LOOP: OFF"
+                );
+
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // BOOST
+            // ------------------------------------------------
+
+            if (id == ID_BOOST)
+            {
+                ChangeBoost();
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // INSTRUMENTS
+            // ------------------------------------------------
+
+            if (id == ID_INSTRUMENTS)
+            {
+                ShowInstrumentSelector();
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // CHORDS
+            // ------------------------------------------------
+
+            if (id == ID_CHORDS)
+            {
+                ShowChordSelector();
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // DRUMS
+            // ------------------------------------------------
+
+            if (id == ID_DRUMS)
+            {
+                ShowDrumSelector();
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // TEMPO
+            // ------------------------------------------------
+
+            if (id == ID_TEMPO_MINUS)
+            {
+                ChangeTempo(
+                    -TEMPO_STEP
+                );
+
+                return 0;
+            }
+
+            if (id == ID_TEMPO_PLUS)
+            {
+                ChangeTempo(
+                    TEMPO_STEP
+                );
+
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // PITCH
+            // ------------------------------------------------
+
+            if (id == ID_PITCH_MINUS)
+            {
+                ChangePitch(
+                    -PITCH_STEP
+                );
+
+                return 0;
+            }
+
+            if (id == ID_PITCH_PLUS)
+            {
+                ChangePitch(
+                    PITCH_STEP
+                );
+
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // SAVE TRACK
+            // ------------------------------------------------
+
+            if (id == ID_SAVE_TRACK)
+            {
+                SaveCurrentTrack();
+
+                RebuildTrackControls();
+
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // COMBINE + SAVE
+            // ------------------------------------------------
+
+            if (id == ID_COMBINE_SAVE)
+            {
+                SaveCombinedTrackToFile();
+
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // IMPORT
+            // ------------------------------------------------
+
+            if (id == ID_IMPORT_TRACKS)
+            {
+                ImportTracksFromFile();
+
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // EXPORT WAV
+            // ------------------------------------------------
+
+            if (id == ID_EXPORT_WAV)
+            {
+                ExportCurrentTrackWav();
+
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // EXPORT MP3
+            // ------------------------------------------------
+
+            if (id == ID_EXPORT_MP3)
+            {
+                ExportCurrentTrackMp3();
+
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // EXPORT YOUTUBE MP4
+            // ------------------------------------------------
+
+            if (id == ID_EXPORT_MP4)
+            {
+                ExportCurrentTrackMp4();
+
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // LOAD TRACK
+            // ------------------------------------------------
+
+            if (
+                id >= ID_LOAD_TRACK_BASE &&
+                id <
+                ID_LOAD_TRACK_BASE + 1000)
+            {
+                size_t index =
+                    static_cast<size_t>(
+                        id -
+                        ID_LOAD_TRACK_BASE
+                    );
+
+                LoadTrack(index);
+
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // PLAY TRACK
+            // ------------------------------------------------
+
+            if (
+                id >= ID_PLAY_TRACK_BASE &&
+                id <
+                ID_PLAY_TRACK_BASE + 1000)
+            {
+                size_t index =
+                    static_cast<size_t>(
+                        id -
+                        ID_PLAY_TRACK_BASE
+                    );
+
+                if (
+                    index < savedTracks.size() &&
+                    !playing)
+                {
+                    std::thread(
+                        PlaySongText,
+                        savedTracks[index]
+                    ).detach();
+                }
+
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // DELETE TRACK
+            // ------------------------------------------------
+
+            if (
+                id >= ID_DELETE_TRACK_BASE &&
+                id <
+                ID_DELETE_TRACK_BASE + 1000)
+            {
+                size_t index =
+                    static_cast<size_t>(
+                        id -
+                        ID_DELETE_TRACK_BASE
+                    );
+
+                DeleteTrack(index);
+
+                RebuildTrackControls();
+
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // NOTE
+            // ------------------------------------------------
+
+            auto noteIt =
+                noteCommands.find(id);
+
+            if (
+                noteIt !=
+                noteCommands.end())
+            {
+                InsertEditorText(
+                    noteIt->second +
+                    "\r\n"
+                );
+
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // CHORD
+            // ------------------------------------------------
+
+            auto chordIt =
+                chordCommands.find(id);
+
+            if (
+                chordIt !=
+                chordCommands.end())
+            {
+                InsertEditorText(
+                    chordIt->second
+                );
+
+                return 0;
+            }
+
+            // ------------------------------------------------
+            // DRUM
+            // ------------------------------------------------
+
+            auto drumIt =
+                drumCommands.find(id);
+
+            if (
+                drumIt !=
+                drumCommands.end())
+            {
+                InsertEditorText(
+                    drumIt->second +
+                    "\r\n"
+                );
+
+                return 0;
+            }
+
+            break;
+        }
+
+        // ----------------------------------------------------
+        // KEYBOARD
+        // ----------------------------------------------------
+
+        case WM_KEYDOWN:
+        {
+            if (wParam == VK_ESCAPE)
+            {
+                stopRequested = true;
+                return 0;
+            }
+
+            break;
+        }
+
+        // ----------------------------------------------------
+        // MOUSE WHEEL
+        // ----------------------------------------------------
+
+        case WM_MOUSEWHEEL:
+        {
+            int delta =
+                GET_WHEEL_DELTA_WPARAM(
+                    wParam
+                );
+
+            if (delta > 0)
+                scrollY -= 40;
+            else
+                scrollY += 40;
+
+            if (scrollY < 0)
+                scrollY = 0;
+
+            int maxScroll =
+                std::max(
+                    0,
+                    contentHeight - 800
+                );
+
+            if (scrollY > maxScroll)
+                scrollY =
+                    maxScroll;
+
+            RebuildTrackControls();
+
+            return 0;
+        }
+
+        // ----------------------------------------------------
+        // DESTROY
+        // ----------------------------------------------------
+
+        case WM_DESTROY:
+        {
+            stopRequested = true;
+
+            if (editBrush)
+            {
+                DeleteObject(
+                    editBrush
+                );
+
+                editBrush = nullptr;
+            }
+
+            PostQuitMessage(0);
+
+            return 0;
+        }
+    }
+
+    return DefWindowProcA(
+        hwnd,
+        message,
+        wParam,
+        lParam
+    );
+}
+
+// ============================================================
+// REGISTER WINDOW
+// ============================================================
+
+bool RegisterMainWindowClass(
+    HINSTANCE instance)
+{
+    WNDCLASSEXA wc = {};
+
+    wc.cbSize =
+        sizeof(WNDCLASSEXA);
+
+    wc.style =
+        CS_HREDRAW |
+        CS_VREDRAW;
+
+    wc.lpfnWndProc =
+        MainWindowProc;
+
+    wc.hInstance =
+        instance;
+
+    wc.hCursor =
+        LoadCursor(
+            nullptr,
+            IDC_ARROW
+        );
+
+    wc.hbrBackground =
+        reinterpret_cast<HBRUSH>(
+            GetStockObject(
+                NULL_BRUSH
+            )
+        );
+
+    wc.lpszClassName =
+        "MusicTrackEditorWindow";
+
+    return
+        RegisterClassExA(
+            &wc
+        ) != 0;
+}
+
+// ============================================================
+// DEFAULT SONG
+// ============================================================
+
+const char* DEFAULT_SONG =
+"TRACK 1 TEMPO 120\r\n"
+"LENGTH 8\r\n"
+"GUITAR C4 0 1\r\n"
+"GUITAR E4 0 1\r\n"
+"GUITAR G4 0 1\r\n"
+"DRUM KICK 0\r\n"
+"DRUM SNARE 2\r\n"
+"GUITAR F4 4 1\r\n"
+"GUITAR A4 4 1\r\n"
+"GUITAR C5 4 1\r\n"
+"DRUM KICK 4\r\n";
+
+// ============================================================
+// WINMAIN
+// ============================================================
+
+int WINAPI WinMain(
+    HINSTANCE instance,
+    HINSTANCE,
+    LPSTR,
+    int showCommand)
+{
+    if (!RegisterMainWindowClass(
+        instance))
+    {
+        MessageBoxA(
+            nullptr,
+            "Could not register the window.",
+            "Error",
+            MB_OK | MB_ICONERROR
+        );
+
+        return 1;
+    }
+
+    mainWindow =
+        CreateWindowExA(
+            0,
+            "MusicTrackEditorWindow",
+            "Music Track Editor",
+            WS_OVERLAPPEDWINDOW |
+            WS_CLIPCHILDREN,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            1200,
+            850,
+            nullptr,
+            nullptr,
+            instance,
+            nullptr
+        );
+
+    if (!mainWindow)
+    {
+        MessageBoxA(
+            nullptr,
+            "Could not create the main window.",
+            "Error",
+            MB_OK | MB_ICONERROR
+        );
+
+        return 1;
+    }
+
+    ShowWindow(
+        mainWindow,
+        showCommand
+    );
+
+    UpdateWindow(
+        mainWindow
+    );
+
+    SetEditorText(
+        DEFAULT_SONG
+    );
+
+    MSG message;
+
+    while (
+        GetMessageA(
+            &message,
+            nullptr,
+            0,
+            0
+        ) > 0)
+    {
+        TranslateMessage(
+            &message
+        );
+
+        DispatchMessageA(
+            &message
+        );
+    }
+
+    return static_cast<int>(
+        message.wParam
+    );
+}
+
